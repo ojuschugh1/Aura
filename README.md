@@ -121,6 +121,10 @@ aura wiki graph                   # connectivity analysis
 
 aura wiki export                  # Obsidian-compatible markdown + YAML frontmatter
 # exported 12 pages to ~/.aura/wiki-export
+
+aura wiki feed scan.json --tool ghostdep  # feed tool output into wiki
+# [ghostdep] 4 findings (2 high-risk), 42 files scanned
+# created: tool-ghostdep-scans, dep-axios, dep-lodash
 ```
 
 ## Install
@@ -404,6 +408,12 @@ aura wiki export                 # export as Obsidian-compatible markdown with Y
 aura wiki export --out <dir>     # export to a specific directory
 aura wiki graph                  # connectivity stats: hubs, clusters, density
 aura wiki rm <slug>              # delete a wiki page
+
+aura wiki feed <file> --tool sqz       # feed sqz compression stats into wiki
+aura wiki feed <file> --tool ghostdep  # feed dependency scan results
+aura wiki feed <file> --tool claimcheck # feed verification reports
+aura wiki feed <file> --tool etch      # feed API change detection
+aura wiki feed <file> --tool <name>    # feed any tool's JSON output
 
 aura setup <tool>                # generate MCP config (claude/cursor/kiro)
 aura version                     # version info
