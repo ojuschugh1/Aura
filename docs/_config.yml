@@ -1,0 +1,28 @@
+title: Aura
+description: Your AI remembers what it did, proves it, and gets smarter every session.
+baseurl: "/Aura"
+url: "https://ojuschugh1.github.io"
+
+theme: minima
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+markdown: kramdown
+highlighter: rouge
+
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+header_pages:
+  - getting-started.md
+  - wiki.md
+  - autolearn.md
+  - commands.md
+  - configuration.md
+  - mcp.md
+
+github:
+  repository_url: "https://github.com/ojuschugh1/Aura"
