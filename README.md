@@ -7,7 +7,7 @@
 
 Aura is a local-first daemon that gives every AI tool you use — Claude Code, Cursor, Kiro, Gemini CLI — persistent memory, claim verification, token compression, dependency scanning, and a compounding knowledge wiki. One binary. Zero cloud. Works across tools.
 
-**Current status: v0.7-dev** — 19 packages, 414 passing tests.
+**Current status: v0.9-dev** — 20 packages, ~18,000 lines of Go, 450+ passing tests.
 
 ---
 
@@ -90,44 +90,50 @@ aura replay <session_id>         # replay and diff
 
 **Auto-capture** — Automatically extracts decisions from AI sessions ("we decided to use PostgreSQL", "going with microservices") and stores them in memory without manual effort.
 
-**Knowledge wiki** — A persistent, compounding knowledge base maintained by your AI tools. Ingest sources once, and Aura builds interlinked pages — summaries, entity pages, concept pages — that get richer with every source you add and every question you ask. Export to Obsidian-compatible markdown with YAML frontmatter and `[[wikilinks]]`. Inspired by [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
+**Knowledge wiki** — A persistent, compounding knowledge base maintained by your AI tools. Ingest sources once — files, URLs, or tool output — and Aura builds interlinked pages that get richer with every source you add and every question you ask. Navigate the knowledge graph, trace connections between concepts, visualize the whole map in your browser, and let Aura watch your docs folder for automatic updates. Zero LLM calls. Inspired by [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
 
 ```
-aura wiki ingest design.md        # ingest a source document
-# ingested: design.md (source #1)
-# created:  design-md, architecture-overview, database-layer
+aura wiki ingest design.md              # ingest a file
+aura wiki ingest https://example.com    # ingest a URL (HTML → markdown)
+aura wiki ingest --dir ./docs           # batch ingest a whole folder
 
-aura wiki ingest --dir ./docs     # batch ingest a whole folder
+aura wiki query "authentication"        # search and synthesise
+aura wiki query "auth" --save           # file the answer as a synthesis page
 
-aura wiki query "authentication"  # search and synthesise
-# found 3 page(s):
-# ## Authentication
-# JWT tokens with 24-hour expiry...
+aura wiki trace auth-service database   # shortest path between two pages
+# auth-service → jwt-tokens → database (2 hops)
 
-aura wiki query "auth" --save     # file the answer as a synthesis page
+aura wiki nearby postgresql --depth 2   # neighborhood exploration
+# 5 page(s) near postgresql (depth 2):
+# redis            entity    1 linked_from
+# database-layer   concept   1 links_to
+# ...
 
-aura wiki lint                    # health-check the wiki
-# pages:   12
-# sources: 5
+aura wiki context auth-service          # full 360° view
+# confidence: 85% (strong)
+# links to (3): jwt-tokens, database, session-mgmt
+# linked from (2): api-gateway, user-service
+# backed by (2 sources): #1 design.md, #3 auth-rfc.md
+
+aura wiki viz                           # interactive HTML knowledge map
+# knowledge map: ~/.aura/wiki-map.html (42 nodes, 87 edges)
+# open in any browser to explore
+
+aura wiki watch ./docs                  # auto-ingest on file changes
+# [auto] meeting-notes.md → 3 created, 1 updated
+
+aura wiki lint                          # health-check with suggestions
 # health:  87%
-# orphans (2):
-#   - old-api-notes
-#   - unused-concept
-# contradictions (1):
-#   - page-old vs page-new: uses MySQL vs uses PostgreSQL
+# suggestions (4):
+#   [create_page] Create "redis-caching" — referenced but missing
+#   [split_page] "architecture" has 620 words — consider splitting
+#   [investigate] "old-api" hasn't been updated in 30+ days
 
-aura wiki graph                   # connectivity analysis
-# pages:    12
-# edges:    34
-# density:  0.258
-# clusters: 2
-
-aura wiki export                  # Obsidian-compatible markdown + YAML frontmatter
-# exported 12 pages to ~/.aura/wiki-export
-
+aura wiki schema --format claude        # generate CLAUDE.md for your LLM
+aura wiki filter "category=entity AND link_count>3"  # Dataview-style queries
+aura wiki export                        # Obsidian-compatible markdown + YAML frontmatter
+aura wiki graph                         # connectivity stats: hubs, clusters, density
 aura wiki feed scan.json --tool ghostdep  # feed tool output into wiki
-# [ghostdep] 4 findings (2 high-risk), 42 files scanned
-# created: tool-ghostdep-scans, dep-axios, dep-lodash
 ```
 
 ## Install
@@ -199,6 +205,8 @@ go build -o aura ./cmd/aura/
 ./aura wiki query "architecture"
 ./aura wiki ls
 ./aura wiki lint
+./aura wiki viz                          # open wiki-map.html in browser
+./aura wiki schema --format claude       # generate CLAUDE.md for your LLM
 ```
 
 ## Testing
@@ -288,6 +296,12 @@ go build -o aura ./cmd/aura/
 ./aura wiki query "architecture" --dir /tmp/aura-test
 ./aura wiki ls --dir /tmp/aura-test
 ./aura wiki lint --dir /tmp/aura-test
+./aura wiki trace <slug-a> <slug-b> --dir /tmp/aura-test
+./aura wiki nearby <slug> --dir /tmp/aura-test
+./aura wiki context <slug> --dir /tmp/aura-test
+./aura wiki viz --dir /tmp/aura-test
+./aura wiki schema --format claude --dir /tmp/aura-test
+./aura wiki filter "category=entity" --dir /tmp/aura-test
 ./aura wiki log --dir /tmp/aura-test
 ./aura wiki index --dir /tmp/aura-test
 ./aura wiki sources --dir /tmp/aura-test
@@ -337,6 +351,8 @@ The core memory, MCP server, cost tracking, policy engine, doom loop detection, 
 │  Trace Recorder                         │
 │  Model Router ─── .aura/routing.toml    │
 │  Wiki Engine ──── knowledge base        │
+│  Knowledge Map ── interactive HTML      │
+│  File Watcher ─── auto-ingest           │
 │  Multi-Agent Coordinator                │
 └─────────────────────────────────────────┘
 ```
@@ -395,21 +411,31 @@ aura trust --duration 15         # auto-approve for 15 minutes
 aura trust --path ./src/test     # auto-approve writes to test dir
 
 aura wiki ingest <file>          # ingest a source into the wiki
+aura wiki ingest <url>           # ingest a URL (HTML → markdown)
 aura wiki ingest <text> --title  # ingest inline text
 aura wiki ingest --dir <folder>  # batch ingest all files in a directory
 aura wiki query <terms>          # search wiki and synthesise answer
 aura wiki query <terms> --save   # search and file the answer as a wiki page
-aura wiki lint                   # health-check: orphans, stale, missing refs, contradictions
+aura wiki lint                   # health-check with actionable suggestions
 aura wiki ls                     # list all wiki pages
 aura wiki ls --category entity   # filter by category
 aura wiki show <slug>            # show full page content
 aura wiki search <query>         # search pages by title/content
+aura wiki trace <from> <to>      # shortest path between two pages
+aura wiki nearby <slug>          # pages within N hops (--depth 2)
+aura wiki context <slug>         # full 360° view: links, sources, confidence
+aura wiki viz                    # interactive HTML knowledge map
+aura wiki viz --out <file>       # export map to specific file
+aura wiki watch <dir>            # auto-ingest on file changes
+aura wiki schema                 # generate LLM schema (CLAUDE.md / AGENTS.md)
+aura wiki schema --format claude # target a specific LLM tool
+aura wiki filter <expression>    # Dataview-style metadata queries
+aura wiki graph                  # connectivity stats: hubs, clusters, density
 aura wiki log                    # show wiki activity log
 aura wiki index                  # show full wiki catalog
 aura wiki sources                # list all ingested raw sources
-aura wiki export                 # export as Obsidian-compatible markdown with YAML frontmatter
+aura wiki export                 # Obsidian-compatible markdown + YAML frontmatter
 aura wiki export --out <dir>     # export to a specific directory
-aura wiki graph                  # connectivity stats: hubs, clusters, density
 aura wiki rm <slug>              # delete a wiki page
 
 aura wiki feed <file> --tool sqz       # feed sqz compression stats into wiki
@@ -466,9 +492,10 @@ aura/
 - [x] v0.5 — Multi-agent shared memory
 - [x] v0.6 — Model router with budget control
 - [x] v0.7 — LLM Wiki knowledge base (ingest, query, lint, index)
-- [ ] v0.8 — Desktop app (Tauri)
-- [ ] v0.9 — Enterprise features (team sync, SSO, audit logs)
-- [ ] v0.10 — Browser extension (Chrome/Firefox)
+- [x] v0.8 — Wiki advanced features (traversal, confidence, visualization, watch, schema, URL ingest, filters, tool pipeline)
+- [ ] v0.9 — Desktop app (Tauri)
+- [ ] v0.10 — Enterprise features (team sync, SSO, audit logs)
+- [ ] v0.11 — Browser extension (Chrome/Firefox)
 - [ ] v1.0 — Plugin system and public API
 
 ## Tech stack
@@ -498,6 +525,12 @@ aura/
 | Session traces | ✅ | ❌ | ❌ | ❌ |
 | Auto-capture | ✅ | ❌ | ❌ | ❌ |
 | Knowledge wiki | ✅ | ❌ | ❌ | ❌ |
+| Knowledge map (HTML) | ✅ | ❌ | ❌ | ❌ |
+| Graph traversal | ✅ | ❌ | ❌ | ❌ |
+| Confidence scoring | ✅ | ❌ | ❌ | ❌ |
+| File watch auto-ingest | ✅ | ❌ | ❌ | ❌ |
+| URL ingestion | ✅ | ❌ | ❌ | ❌ |
+| LLM schema generator | ✅ | ❌ | ❌ | ❌ |
 | Single binary (Go) | ✅ | ❌ (Python) | ❌ (Python) | ✅ |
 | Local-first | ✅ | ✅ | ❌ | ✅ |
 
