@@ -36,6 +36,11 @@ instead of being re-derived on every query.`,
 	cmd.AddCommand(newWikiFeedCmd(auraDir, jsonOut))
 	cmd.AddCommand(newWikiSchemaCmd(auraDir))
 	cmd.AddCommand(newWikiFilterCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiTraceCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiNearbyCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiContextCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiVizCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiWatchCmd(auraDir))
 	return cmd
 }
 
@@ -865,6 +870,220 @@ Examples:
 					p.UpdatedAt.Format("2006-01-02 15:04"), p.Title)
 			}
 			return nil
+		},
+	}
+}
+
+func newWikiTraceCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "trace <from-slug> <to-slug>",
+		Short: "Find the shortest path between two wiki pages",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			result, err := engine.TracePath(args[0], args[1])
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			if !result.Found {
+				fmt.Fprintf(cmd.OutOrStdout(), "no path found between %s and %s\n", args[0], args[1])
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%s → %s (%d hops)\n\n", result.From, result.To, result.Hops)
+			for i, slug := range result.Path {
+				prefix := "  "
+				if i == 0 {
+					prefix = "● "
+				} else if i == len(result.Path)-1 {
+					prefix = "◉ "
+				} else {
+					prefix = "→ "
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s%s\n", prefix, slug)
+			}
+			return nil
+		},
+	}
+}
+
+func newWikiNearbyCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	var depth int
+	cmd := &cobra.Command{
+		Use:   "nearby <slug>",
+		Short: "Show pages within N hops of a given page",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			result, err := engine.Nearby(args[0], depth)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			if len(result.Pages) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "no pages within %d hops of %s\n", depth, args[0])
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%d page(s) near %s (depth %d):\n\n", len(result.Pages), result.Center, result.Depth)
+			fmt.Fprintf(cmd.OutOrStdout(), "%-25s %-12s %4s %s\n", "SLUG", "CATEGORY", "HOPS", "RELATION")
+			for _, p := range result.Pages {
+				fmt.Fprintf(cmd.OutOrStdout(), "%-25s %-12s %4d %s\n",
+					truncateStr(p.Slug, 25), p.Category, p.Distance, p.Relation)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&depth, "depth", 2, "Maximum hop distance")
+	return cmd
+}
+
+func newWikiContextCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "context <slug>",
+		Short: "Full 360° view of a page — links, sources, activity, confidence",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			result, err := engine.Context(args[0])
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			p := result.Page
+			fmt.Fprintf(cmd.OutOrStdout(), "# %s\n\n", p.Title)
+			fmt.Fprintf(cmd.OutOrStdout(), "slug:       %s\n", p.Slug)
+			fmt.Fprintf(cmd.OutOrStdout(), "category:   %s\n", p.Category)
+			fmt.Fprintf(cmd.OutOrStdout(), "confidence: %.0f%% (%s)\n", result.Confidence*100, wiki.ConfidenceLabel(result.Confidence))
+			fmt.Fprintf(cmd.OutOrStdout(), "words:      %d\n", result.WordCount)
+			if result.IsHub {
+				fmt.Fprintln(cmd.OutOrStdout(), "status:     ★ keystone page")
+			}
+			fmt.Fprintln(cmd.OutOrStdout())
+
+			if len(result.OutboundLinks) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "links to (%d):\n", len(result.OutboundLinks))
+				for _, l := range result.OutboundLinks {
+					fmt.Fprintf(cmd.OutOrStdout(), "  → %s [%s]\n", l.Slug, l.Category)
+				}
+				fmt.Fprintln(cmd.OutOrStdout())
+			}
+
+			if len(result.InboundLinks) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "linked from (%d):\n", len(result.InboundLinks))
+				for _, l := range result.InboundLinks {
+					fmt.Fprintf(cmd.OutOrStdout(), "  ← %s [%s]\n", l.Slug, l.Category)
+				}
+				fmt.Fprintln(cmd.OutOrStdout())
+			}
+
+			if len(result.Sources) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "backed by (%d sources):\n", len(result.Sources))
+				for _, s := range result.Sources {
+					fmt.Fprintf(cmd.OutOrStdout(), "  #%d %s\n", s.ID, s.Title)
+				}
+				fmt.Fprintln(cmd.OutOrStdout())
+			}
+
+			if len(result.RecentLog) > 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "recent activity:")
+				for _, e := range result.RecentLog {
+					fmt.Fprintf(cmd.OutOrStdout(), "  [%s] %s\n", e.Timestamp.Format("2006-01-02 15:04"), e.Summary)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func newWikiVizCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	var outFile string
+	cmd := &cobra.Command{
+		Use:   "viz",
+		Short: "Generate an interactive HTML knowledge map",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			if outFile == "" {
+				outFile = filepath.Join(*auraDir, "wiki-map.html")
+			}
+
+			result, err := engine.Visualize(outFile)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "knowledge map: %s (%d nodes, %d edges)\n", result.FilePath, result.TotalNodes, result.TotalEdges)
+			fmt.Fprintln(cmd.OutOrStdout(), "open in any browser to explore")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&outFile, "out", "", "Output file path (default: .aura/wiki-map.html)")
+	return cmd
+}
+
+func newWikiWatchCmd(auraDir *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "watch <directory>",
+		Short: "Watch a directory and auto-ingest new or changed files",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			w, err := wiki.NewWatcher(engine, args[0])
+			if err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "watching %s for changes (Ctrl+C to stop)...\n", args[0])
+
+			return w.Start(func(path string, result *wiki.IngestResult) {
+				if result.Duplicate {
+					return
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "[auto] %s → %d created, %d updated\n",
+					filepath.Base(path), len(result.PagesCreated), len(result.PagesUpdated))
+			})
 		},
 	}
 }
