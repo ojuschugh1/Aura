@@ -48,6 +48,16 @@ func (e *Engine) GenerateSchema(format SchemaFormat) string {
 	b.WriteString(fmt.Sprintf("- **Categories:** %s\n", stats.categories))
 	b.WriteString(fmt.Sprintf("- **Last updated:** %s\n\n", time.Now().Format("2006-01-02")))
 
+	// Keystone pages (hubs).
+	if len(stats.keystones) > 0 {
+		b.WriteString("### Keystone Pages\n\n")
+		b.WriteString("These are the most connected pages — the backbone of the wiki. Keep them current.\n\n")
+		for _, k := range stats.keystones {
+			b.WriteString(fmt.Sprintf("- **[[%s]]** — %d connections\n", k.slug, k.connections))
+		}
+		b.WriteString("\n")
+	}
+
 	// Architecture.
 	b.WriteString("## Architecture\n\n")
 	b.WriteString("The wiki has three layers:\n\n")
@@ -139,14 +149,28 @@ type schemaStats struct {
 	totalPages   int
 	totalSources int
 	categories   string
+	keystones    []keystonePage
+}
+
+type keystonePage struct {
+	slug        string
+	connections int
 }
 
 func (e *Engine) gatherStats() schemaStats {
 	pages, _ := e.store.ListPages("")
 	cats := make(map[string]int)
+	inbound := make(map[string]int)
+	outbound := make(map[string]int)
+
 	for _, p := range pages {
 		cats[p.Category]++
+		outbound[p.Slug] = len(p.LinksSlugs)
+		for _, link := range p.LinksSlugs {
+			inbound[link]++
+		}
 	}
+
 	var catParts []string
 	for cat, count := range cats {
 		catParts = append(catParts, fmt.Sprintf("%s (%d)", cat, count))
@@ -155,9 +179,40 @@ func (e *Engine) gatherStats() schemaStats {
 	if len(catParts) > 0 {
 		catStr = strings.Join(catParts, ", ")
 	}
+
+	// Find keystone pages (top 5 by total connections).
+	type ranked struct {
+		slug  string
+		total int
+	}
+	var all []ranked
+	for _, p := range pages {
+		total := outbound[p.Slug] + inbound[p.Slug]
+		if total >= 3 {
+			all = append(all, ranked{p.Slug, total})
+		}
+	}
+	// Sort by total descending (simple selection for small N).
+	for i := 0; i < len(all); i++ {
+		for j := i + 1; j < len(all); j++ {
+			if all[j].total > all[i].total {
+				all[i], all[j] = all[j], all[i]
+			}
+		}
+	}
+	var keystones []keystonePage
+	limit := 5
+	if len(all) < limit {
+		limit = len(all)
+	}
+	for _, r := range all[:limit] {
+		keystones = append(keystones, keystonePage{slug: r.slug, connections: r.total})
+	}
+
 	return schemaStats{
 		totalPages:   e.store.PageCount(),
 		totalSources: e.store.SourceCount(),
 		categories:   catStr,
+		keystones:    keystones,
 	}
 }
