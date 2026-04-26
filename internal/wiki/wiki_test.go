@@ -1060,3 +1060,209 @@ func TestExtractHTMLTitle(t *testing.T) {
 		t.Errorf("title = %q, want %q", title, "My Article & More")
 	}
 }
+
+// --- Traversal, confidence, visualization tests ---
+
+func TestTracePath(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	// A → B → C
+	_, _ = store.CreatePage("alpha", "Alpha", "Start", "entity", nil, nil, []string{"bravo"})
+	_, _ = store.CreatePage("bravo", "Bravo", "Middle", "entity", nil, nil, []string{"charlie"})
+	_, _ = store.CreatePage("charlie", "Charlie", "End", "entity", nil, nil, nil)
+	_, _ = store.CreatePage("delta", "Delta", "Isolated", "entity", nil, nil, nil)
+
+	// Direct path: alpha → bravo → charlie.
+	result, err := engine.TracePath("alpha", "charlie")
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	if !result.Found {
+		t.Fatal("expected path to be found")
+	}
+	if result.Hops != 2 {
+		t.Errorf("hops = %d, want 2", result.Hops)
+	}
+	if len(result.Path) != 3 {
+		t.Errorf("path length = %d, want 3", len(result.Path))
+	}
+
+	// Reverse path should also work (bidirectional).
+	result, err = engine.TracePath("charlie", "alpha")
+	if err != nil {
+		t.Fatalf("trace reverse: %v", err)
+	}
+	if !result.Found {
+		t.Fatal("expected reverse path to be found (bidirectional)")
+	}
+
+	// No path to isolated node.
+	result, err = engine.TracePath("alpha", "delta")
+	if err != nil {
+		t.Fatalf("trace isolated: %v", err)
+	}
+	if result.Found {
+		t.Error("expected no path to isolated node")
+	}
+}
+
+func TestNearby(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	_, _ = store.CreatePage("center", "Center", "Hub page", "entity", nil, nil, []string{"near1", "near2"})
+	_, _ = store.CreatePage("near1", "Near 1", "One hop", "entity", nil, nil, []string{"far1"})
+	_, _ = store.CreatePage("near2", "Near 2", "One hop", "concept", nil, nil, nil)
+	_, _ = store.CreatePage("far1", "Far 1", "Two hops", "entity", nil, nil, nil)
+	_, _ = store.CreatePage("isolated", "Isolated", "No connection", "entity", nil, nil, nil)
+
+	result, err := engine.Nearby("center", 2)
+	if err != nil {
+		t.Fatalf("nearby: %v", err)
+	}
+	if result.Center != "center" {
+		t.Errorf("center = %q, want %q", result.Center, "center")
+	}
+
+	// Should find near1 (1 hop), near2 (1 hop), far1 (2 hops). Not isolated.
+	slugs := make(map[string]bool)
+	for _, p := range result.Pages {
+		slugs[p.Slug] = true
+	}
+	if !slugs["near1"] || !slugs["near2"] {
+		t.Error("expected near1 and near2 in results")
+	}
+	if !slugs["far1"] {
+		t.Error("expected far1 at depth 2")
+	}
+	if slugs["isolated"] {
+		t.Error("isolated should not appear")
+	}
+
+	// Depth 1 should only find near1 and near2.
+	result, err = engine.Nearby("center", 1)
+	if err != nil {
+		t.Fatalf("nearby depth 1: %v", err)
+	}
+	for _, p := range result.Pages {
+		if p.Distance > 1 {
+			t.Errorf("page %s has distance %d, want <= 1", p.Slug, p.Distance)
+		}
+	}
+}
+
+func TestContext(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	src, _, _ := store.IngestSource("Test Source", "Source content", "text", "test.txt")
+	_, _ = store.CreatePage("target", "Target Page", "Content about the target.",
+		"entity", []string{"test"}, []int64{src.ID}, []string{"linked-page"})
+	_, _ = store.CreatePage("linked-page", "Linked Page", "Another page.", "concept", nil, nil, nil)
+	_, _ = store.CreatePage("referrer", "Referrer", "Links to target.", "entity", nil, nil, []string{"target"})
+
+	result, err := engine.Context("target")
+	if err != nil {
+		t.Fatalf("context: %v", err)
+	}
+
+	if result.Page.Slug != "target" {
+		t.Errorf("slug = %q, want %q", result.Page.Slug, "target")
+	}
+	if len(result.OutboundLinks) != 1 {
+		t.Errorf("outbound = %d, want 1", len(result.OutboundLinks))
+	}
+	if len(result.InboundLinks) != 1 {
+		t.Errorf("inbound = %d, want 1", len(result.InboundLinks))
+	}
+	if len(result.Sources) != 1 {
+		t.Errorf("sources = %d, want 1", len(result.Sources))
+	}
+	if result.Confidence <= 0 || result.Confidence > 1 {
+		t.Errorf("confidence = %f, want 0 < c <= 1", result.Confidence)
+	}
+	if result.WordCount == 0 {
+		t.Error("expected non-zero word count")
+	}
+}
+
+func TestConfidenceLabel(t *testing.T) {
+	tests := []struct {
+		score float64
+		want  string
+	}{
+		{0.95, "verified"},
+		{0.8, "strong"},
+		{0.65, "inferred"},
+		{0.45, "weak"},
+		{0.2, "uncertain"},
+	}
+	for _, tt := range tests {
+		got := ConfidenceLabel(tt.score)
+		if got != tt.want {
+			t.Errorf("ConfidenceLabel(%f) = %q, want %q", tt.score, got, tt.want)
+		}
+	}
+}
+
+func TestVisualize(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	_, _ = store.CreatePage("node-a", "Node A", "Content A", "entity", nil, nil, []string{"node-b"})
+	_, _ = store.CreatePage("node-b", "Node B", "Content B", "concept", nil, nil, nil)
+
+	outPath := filepath.Join(t.TempDir(), "wiki-map.html")
+	result, err := engine.Visualize(outPath)
+	if err != nil {
+		t.Fatalf("visualize: %v", err)
+	}
+	if result.TotalNodes != 2 {
+		t.Errorf("nodes = %d, want 2", result.TotalNodes)
+	}
+	if result.TotalEdges != 1 {
+		t.Errorf("edges = %d, want 1", result.TotalEdges)
+	}
+
+	// Verify the HTML file was created and contains expected content.
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read viz: %v", err)
+	}
+	html := string(data)
+	if !strings.Contains(html, "Aura Wiki") {
+		t.Error("expected 'Aura Wiki' in HTML title")
+	}
+	if !strings.Contains(html, "node-a") {
+		t.Error("expected node-a in HTML")
+	}
+	if !strings.Contains(html, "canvas") {
+		t.Error("expected canvas element in HTML")
+	}
+}
+
+func TestSchemaKeystones(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	// Create a hub page with many connections.
+	_, _ = store.CreatePage("hub", "Hub Page", "Central page.", "entity", nil, nil,
+		[]string{"spoke1", "spoke2", "spoke3"})
+	_, _ = store.CreatePage("spoke1", "Spoke 1", "Connected.", "entity", nil, nil, []string{"hub"})
+	_, _ = store.CreatePage("spoke2", "Spoke 2", "Connected.", "entity", nil, nil, []string{"hub"})
+	_, _ = store.CreatePage("spoke3", "Spoke 3", "Connected.", "entity", nil, nil, nil)
+
+	schema := engine.GenerateSchema(SchemaGeneric)
+	if !strings.Contains(schema, "Keystone Pages") {
+		t.Error("expected Keystone Pages section in schema")
+	}
+	if !strings.Contains(schema, "[[hub]]") {
+		t.Error("expected hub page in keystones")
+	}
+}
