@@ -3,13 +3,17 @@ package daemon
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 
+	"github.com/ojuschugh1/aura/internal/autocapture"
 	"github.com/ojuschugh1/aura/internal/db"
+	"github.com/ojuschugh1/aura/internal/memory"
+	"github.com/ojuschugh1/aura/internal/session"
 )
 
 // EnvDaemon is set to "1" when the process is running as the background daemon.
@@ -138,8 +142,27 @@ func RunDaemon(dir string, port int, sessionID string) error {
 	}
 	defer RemoveLockFile(dir)
 
+	// Set up session manager with auto-capture hook.
+	sessMgr := session.New(database)
+	store := memory.New(database)
+	captureEngine := autocapture.NewCaptureEngine(store, autocapture.DefaultCaptureConfig())
+	tracesDir := filepath.Join(dir, "traces")
+
+	sessMgr.SetOnEndHook(func(sessionID string) {
+		go func() {
+			transcriptPath := filepath.Join(tracesDir, sessionID+".jsonl")
+			n, err := captureEngine.ProcessTranscript(sessionID, transcriptPath)
+			if err != nil {
+				slog.Warn("auto-capture failed", "session_id", sessionID, "err", err)
+				return
+			}
+			slog.Info("auto-capture completed", "session_id", sessionID, "captured", n)
+		}()
+	})
+
 	d := &Daemon{dir: dir, db: database, mcp: mcp, port: mcp.Port(), sessID: sessionID}
-	_ = d // used by future tasks
+	_ = d       // used by future tasks
+	_ = sessMgr // used by future tasks
 
 	// Block until a stop signal is received.
 	waitForStop()
