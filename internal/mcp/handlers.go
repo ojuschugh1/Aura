@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/ojuschugh1/aura/internal/compress"
@@ -460,4 +461,130 @@ func (h *handlers) wikiSaveQuery(_ context.Context, params map[string]interface{
 		"query":      query,
 		"page_count": result.PageCount,
 	}, nil
+}
+
+// --- Wiki tool feed handlers ---
+
+func (h *handlers) wikiFeedSQZ(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	report := wiki.SQZReport{}
+	if v, ok := params["session_id"]; ok {
+		report.SessionID, _ = v.(string)
+	}
+	if v, ok := params["original_tokens"]; ok {
+		if f, ok := v.(float64); ok {
+			report.OriginalTokens = int(f)
+		}
+	}
+	if v, ok := params["compressed_tokens"]; ok {
+		if f, ok := v.(float64); ok {
+			report.CompressedTokens = int(f)
+		}
+	}
+	if v, ok := params["reduction_pct"]; ok {
+		report.ReductionPct, _ = v.(float64)
+	}
+	if v, ok := params["deduplicated"]; ok {
+		report.Deduplicated, _ = v.(bool)
+	}
+	result, err := h.wikiEngine.IngestSQZ(report)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (h *handlers) wikiFeedGhostDep(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	// Accept the full report as a JSON blob in "report" param.
+	reportData, ok := params["report"]
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: report is required")
+	}
+	b, err := json.Marshal(reportData)
+	if err != nil {
+		return nil, fmt.Errorf("marshal report: %w", err)
+	}
+	var report wiki.GhostDepReport
+	if err := json.Unmarshal(b, &report); err != nil {
+		return nil, fmt.Errorf("parse ghostdep report: %w", err)
+	}
+	result, err := h.wikiEngine.IngestGhostDep(report)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (h *handlers) wikiFeedClaimCheck(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	reportData, ok := params["report"]
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: report is required")
+	}
+	b, err := json.Marshal(reportData)
+	if err != nil {
+		return nil, fmt.Errorf("marshal report: %w", err)
+	}
+	var report wiki.ClaimCheckReport
+	if err := json.Unmarshal(b, &report); err != nil {
+		return nil, fmt.Errorf("parse claimcheck report: %w", err)
+	}
+	result, err := h.wikiEngine.IngestClaimCheck(report)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (h *handlers) wikiFeedEtch(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	reportData, ok := params["report"]
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: report is required")
+	}
+	b, err := json.Marshal(reportData)
+	if err != nil {
+		return nil, fmt.Errorf("marshal report: %w", err)
+	}
+	var report wiki.EtchReport
+	if err := json.Unmarshal(b, &report); err != nil {
+		return nil, fmt.Errorf("parse etch report: %w", err)
+	}
+	result, err := h.wikiEngine.IngestEtch(report)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (h *handlers) wikiFeedJSON(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	toolName, _ := stringParam(params, "tool")
+	if toolName == "" {
+		toolName = "unknown"
+	}
+	data, ok := params["data"]
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: data is required")
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal data: %w", err)
+	}
+	result, err := h.wikiEngine.IngestToolJSON(toolName, b)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
