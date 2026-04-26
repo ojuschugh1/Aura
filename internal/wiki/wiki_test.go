@@ -659,3 +659,218 @@ func TestRenderPageMarkdown(t *testing.T) {
 		t.Error("expected wikilink to other-page")
 	}
 }
+
+// --- Adapter tests ---
+
+func TestIngestSQZ(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	report := SQZReport{
+		SessionID:        "sess-001",
+		OriginalTokens:   2400,
+		CompressedTokens: 1800,
+		ReductionPct:     25.0,
+		Deduplicated:     false,
+		Timestamp:        time.Now(),
+	}
+
+	result, err := engine.IngestSQZ(report)
+	if err != nil {
+		t.Fatalf("ingest sqz: %v", err)
+	}
+	if result.Tool != "sqz" {
+		t.Errorf("tool = %q, want %q", result.Tool, "sqz")
+	}
+	if result.SourceID == 0 {
+		t.Error("expected non-zero source ID")
+	}
+	if len(result.PagesCreated) == 0 {
+		t.Error("expected pages to be created")
+	}
+
+	// Verify the cumulative page exists.
+	page, err := store.GetPage("tool-sqz-compression")
+	if err != nil {
+		t.Fatalf("get sqz page: %v", err)
+	}
+	if !strings.Contains(page.Content, "2400") {
+		t.Error("expected original tokens in page content")
+	}
+
+	// Second ingest should update, not create.
+	report2 := SQZReport{
+		SessionID:        "sess-002",
+		OriginalTokens:   3000,
+		CompressedTokens: 2100,
+		ReductionPct:     30.0,
+		Timestamp:        time.Now().Add(time.Hour),
+	}
+	result2, err := engine.IngestSQZ(report2)
+	if err != nil {
+		t.Fatalf("ingest sqz 2: %v", err)
+	}
+	if len(result2.PagesUpdated) == 0 {
+		t.Error("expected page update on second ingest")
+	}
+}
+
+func TestIngestGhostDep(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	report := GhostDepReport{
+		ProjectRoot:  "/tmp/project",
+		ScannedFiles: 42,
+		DurationMs:   150,
+		Findings: []GhostDepFinding{
+			{Type: "phantom", Package: "axios", File: "src/api.js", Line: 3, Language: "javascript", Confidence: 1.0},
+			{Type: "unused", Package: "lodash", File: "package.json", Line: 10, Language: "javascript", Confidence: 0.9},
+			{Type: "phantom", Package: "chalk", File: "src/util.js", Line: 1, Language: "javascript", Confidence: 0.5},
+		},
+		Timestamp: time.Now(),
+	}
+
+	result, err := engine.IngestGhostDep(report)
+	if err != nil {
+		t.Fatalf("ingest ghostdep: %v", err)
+	}
+	if result.Tool != "ghostdep" {
+		t.Errorf("tool = %q, want %q", result.Tool, "ghostdep")
+	}
+
+	// Should create the scan history page + per-package pages for high-risk findings.
+	if len(result.PagesCreated) < 2 {
+		t.Errorf("expected at least 2 pages created (history + high-risk packages), got %d", len(result.PagesCreated))
+	}
+
+	// Verify scan history page.
+	page, err := store.GetPage("tool-ghostdep-scans")
+	if err != nil {
+		t.Fatalf("get ghostdep page: %v", err)
+	}
+	if !strings.Contains(page.Content, "axios") {
+		t.Error("expected axios in scan history")
+	}
+
+	// Verify per-package page for high-risk finding.
+	_, err = store.GetPage("dep-axios")
+	if err != nil {
+		t.Error("expected dep-axios page for high-risk finding")
+	}
+
+	// Low-confidence finding should NOT get its own page.
+	_, err = store.GetPage("dep-chalk")
+	if err == nil {
+		t.Error("did not expect dep-chalk page for low-confidence finding")
+	}
+}
+
+func TestIngestClaimCheck(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	report := ClaimCheckReport{
+		SessionID:   "sess-001",
+		TotalClaims: 5,
+		PassCount:   4,
+		FailCount:   1,
+		TruthPct:    80.0,
+		Claims: []ClaimCheckClaim{
+			{Type: "file_created", Target: "src/auth.ts", Pass: true, Detail: "file exists"},
+			{Type: "package_installed", Target: "jsonwebtoken", Pass: false, Detail: "not in lockfile"},
+		},
+		Timestamp: time.Now(),
+	}
+
+	result, err := engine.IngestClaimCheck(report)
+	if err != nil {
+		t.Fatalf("ingest claimcheck: %v", err)
+	}
+	if result.Tool != "claimcheck" {
+		t.Errorf("tool = %q, want %q", result.Tool, "claimcheck")
+	}
+	if !strings.Contains(result.Summary, "80.0%") {
+		t.Errorf("summary should contain truth pct, got %q", result.Summary)
+	}
+
+	// Verify history page.
+	page, err := store.GetPage("tool-claimcheck-history")
+	if err != nil {
+		t.Fatalf("get claimcheck page: %v", err)
+	}
+	if !strings.Contains(page.Content, "FAIL") {
+		t.Error("expected FAIL in verification history")
+	}
+}
+
+func TestIngestEtch(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	report := EtchReport{
+		ServiceName: "user-service",
+		TrafficSpan: "2026-04-20 to 2026-04-26",
+		Changes: []EtchChange{
+			{Endpoint: "POST /api/users", ChangeType: "modified", Description: "Added email field", Breaking: false},
+			{Endpoint: "DELETE /api/users/:id", ChangeType: "removed", Description: "Endpoint removed", Breaking: true},
+		},
+		Timestamp: time.Now(),
+	}
+
+	result, err := engine.IngestEtch(report)
+	if err != nil {
+		t.Fatalf("ingest etch: %v", err)
+	}
+	if result.Tool != "etch" {
+		t.Errorf("tool = %q, want %q", result.Tool, "etch")
+	}
+
+	// Should create service page + breaking endpoint page.
+	if len(result.PagesCreated) < 2 {
+		t.Errorf("expected at least 2 pages (service + breaking endpoint), got %d", len(result.PagesCreated))
+	}
+
+	// Verify service page.
+	page, err := store.GetPage("api-user-service")
+	if err != nil {
+		t.Fatalf("get etch service page: %v", err)
+	}
+	if !strings.Contains(page.Content, "user-service") {
+		t.Error("expected service name in page content")
+	}
+	if !strings.Contains(page.Content, "BREAKING") {
+		t.Error("expected BREAKING flag in page content")
+	}
+}
+
+func TestIngestToolJSON(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	jsonData := []byte(`{"status": "ok", "items": [1, 2, 3]}`)
+	result, err := engine.IngestToolJSON("custom-tool", jsonData)
+	if err != nil {
+		t.Fatalf("ingest json: %v", err)
+	}
+	if result.Tool != "custom-tool" {
+		t.Errorf("tool = %q, want %q", result.Tool, "custom-tool")
+	}
+	if result.SourceID == 0 {
+		t.Error("expected non-zero source ID")
+	}
+
+	// Verify the tool history page.
+	page, err := store.GetPage("tool-custom-tool")
+	if err != nil {
+		t.Fatalf("get tool page: %v", err)
+	}
+	if !strings.Contains(page.Content, "custom-tool") {
+		t.Error("expected tool name in page content")
+	}
+}
