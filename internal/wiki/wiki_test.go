@@ -1266,3 +1266,236 @@ func TestSchemaKeystones(t *testing.T) {
 		t.Error("expected hub page in keystones")
 	}
 }
+
+// --- Metabolism, access, audit, pressure tests ---
+
+func TestMetabolize(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	// Create a page that was updated 60 days ago (stale).
+	_, _ = store.CreatePage("old-page", "Old Page", "Ancient content.", "entity", nil, nil, nil)
+	sixtyDaysAgo := time.Now().AddDate(0, 0, -60).Format(time.RFC3339Nano)
+	db.Exec(`UPDATE wiki_pages SET updated_at = ?, vitality = 0.8 WHERE slug = 'old-page'`, sixtyDaysAgo)
+
+	// Create a fresh page.
+	_, _ = store.CreatePage("fresh-page", "Fresh Page", "New content.", "entity", nil, nil, nil)
+
+	cfg := DefaultMetabolismConfig()
+	result, err := engine.Metabolize(cfg)
+	if err != nil {
+		t.Fatalf("metabolize: %v", err)
+	}
+
+	if result.PagesDecayed == 0 {
+		t.Error("expected at least one page to decay")
+	}
+
+	// Verify the old page's vitality decreased.
+	page, _ := store.GetPage("old-page")
+	if page.Vitality >= 0.8 {
+		t.Errorf("old page vitality should have decayed from 0.8, got %f", page.Vitality)
+	}
+
+	// Fresh page should not have decayed.
+	fresh, _ := store.GetPage("fresh-page")
+	if fresh.Vitality < 1.0 {
+		t.Errorf("fresh page vitality should be 1.0, got %f", fresh.Vitality)
+	}
+}
+
+func TestPressureAccumulation(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	_, _ = store.CreatePage("established", "Established View", "We use MySQL.", "entity", nil, nil, nil)
+
+	// Add pressure from multiple sources.
+	_ = store.RecordPressure("established", "source-1", "Uses PostgreSQL instead", "contradiction")
+	_ = store.RecordPressure("established", "source-2", "Migrated to PostgreSQL", "contradiction")
+	_ = store.RecordPressure("established", "source-3", "PostgreSQL is the primary DB", "contradiction")
+
+	// Check pressure.
+	entries, err := store.GetPressure("established")
+	if err != nil {
+		t.Fatalf("get pressure: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Errorf("expected 3 pressure entries, got %d", len(entries))
+	}
+
+	// Metabolize should detect the pressure threshold.
+	cfg := DefaultMetabolismConfig()
+	cfg.PressureThreshold = 3
+	result, err := engine.Metabolize(cfg)
+	if err != nil {
+		t.Fatalf("metabolize: %v", err)
+	}
+	if len(result.PressureAlerts) == 0 {
+		t.Error("expected pressure alert for 'established' page")
+	}
+
+	// Resolve pressure.
+	_ = store.ResolvePressure("established")
+	entries, _ = store.GetPressure("established")
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries after resolve, got %d", len(entries))
+	}
+}
+
+func TestAccessTiers(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+
+	_, _ = store.CreatePage("public-page", "Public", "Visible to all.", "entity", nil, nil, nil)
+	_, _ = store.CreatePage("team-page", "Team", "Team only.", "entity", nil, nil, nil)
+	_, _ = store.CreatePage("private-page", "Private", "Owner only.", "entity", nil, nil, nil)
+
+	_ = store.SetAccessTier("team-page", "team")
+	_ = store.SetAccessTier("private-page", "private")
+
+	// Public agent sees only public pages.
+	pages, _ := store.ListPagesWithAccess("", "public")
+	if len(pages) != 1 {
+		t.Errorf("public access: expected 1 page, got %d", len(pages))
+	}
+
+	// Team agent sees public + team.
+	pages, _ = store.ListPagesWithAccess("", "team")
+	if len(pages) != 2 {
+		t.Errorf("team access: expected 2 pages, got %d", len(pages))
+	}
+
+	// Private/owner sees all.
+	pages, _ = store.ListPagesWithAccess("", "private")
+	if len(pages) != 3 {
+		t.Errorf("private access: expected 3 pages, got %d", len(pages))
+	}
+
+	// Invalid tier.
+	err := store.SetAccessTier("public-page", "invalid")
+	if err == nil {
+		t.Error("expected error for invalid tier")
+	}
+}
+
+func TestAuditChain(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	// Record some audit entries.
+	_ = engine.Audit().Record("page-a", "create", "test-agent", "Created page A")
+	_ = engine.Audit().Record("page-b", "create", "test-agent", "Created page B")
+	_ = engine.Audit().Record("page-a", "update", "test-agent", "Updated page A")
+
+	// Check history for page-a.
+	history, err := engine.Audit().History("page-a", 10)
+	if err != nil {
+		t.Fatalf("audit history: %v", err)
+	}
+	if len(history) != 2 {
+		t.Errorf("expected 2 entries for page-a, got %d", len(history))
+	}
+
+	// Check full history.
+	full, err := engine.Audit().FullHistory(10)
+	if err != nil {
+		t.Fatalf("audit full: %v", err)
+	}
+	if len(full) != 3 {
+		t.Errorf("expected 3 total entries, got %d", len(full))
+	}
+
+	// Verify chain integrity.
+	verification, err := engine.Audit().VerifyChain()
+	if err != nil {
+		t.Fatalf("verify chain: %v", err)
+	}
+	if !verification.Intact {
+		t.Errorf("chain should be intact, broken at %v: %s", verification.BrokenAt, verification.BrokenMessage)
+	}
+	if verification.Verified != 3 {
+		t.Errorf("verified = %d, want 3", verification.Verified)
+	}
+
+	// Verify hash chaining — each entry's prev_hash should match the previous entry's hash.
+	if full[0].PrevHash != "" {
+		t.Error("first entry should have empty prev_hash")
+	}
+	if full[1].PrevHash != full[0].EntryHash {
+		t.Error("second entry's prev_hash should match first entry's hash")
+	}
+	if full[2].PrevHash != full[1].EntryHash {
+		t.Error("third entry's prev_hash should match second entry's hash")
+	}
+}
+
+func TestAuditChainTamperDetection(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	_ = engine.Audit().Record("page-a", "create", "agent", "Created")
+	_ = engine.Audit().Record("page-b", "create", "agent", "Created")
+	_ = engine.Audit().Record("page-c", "create", "agent", "Created")
+
+	// Tamper with the middle entry.
+	db.Exec(`UPDATE wiki_audit SET entry_hash = 'tampered' WHERE id = 2`)
+
+	verification, err := engine.Audit().VerifyChain()
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if verification.Intact {
+		t.Error("chain should be broken after tampering")
+	}
+	if verification.BrokenAt == nil || *verification.BrokenAt != 3 {
+		t.Errorf("break should be detected at entry 3, got %v", verification.BrokenAt)
+	}
+}
+
+func TestIngestCreatesAuditEntries(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	_, err := engine.Ingest("Test Doc", "# Test\n\nSome **important** content.", "markdown", "test.md")
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+
+	// Should have audit entries for created pages.
+	full, _ := engine.Audit().FullHistory(50)
+	if len(full) == 0 {
+		t.Error("expected audit entries after ingest")
+	}
+
+	// All entries should have non-empty hashes.
+	for _, e := range full {
+		if e.EntryHash == "" {
+			t.Errorf("entry #%d has empty hash", e.ID)
+		}
+	}
+}
+
+func TestQueryRecordsAccess(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	_, _ = store.CreatePage("test-page", "Test", "Content about testing.", "entity", nil, nil, nil)
+
+	// Query should increment query_count.
+	_, _ = engine.Query("testing")
+
+	page, _ := store.GetPage("test-page")
+	if page.QueryCount == 0 {
+		t.Error("expected query_count > 0 after query")
+	}
+	if page.LastQueried == nil {
+		t.Error("expected last_queried to be set after query")
+	}
+}
