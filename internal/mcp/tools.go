@@ -77,11 +77,11 @@ func RegisterWikiTools(s *Server, engine *wiki.Engine) {
 	s.Register("wiki_ingest_url", h.wikiIngestURL)
 }
 
-// RegisterGraphTools registers the knowledge graph and search tools.
-func RegisterGraphTools(s *Server, store *memory.Store) {
+// RegisterContextTools registers context web and search tools.
+func RegisterContextTools(s *Server, store *memory.Store) {
 	h := &handlers{store: store}
-	s.Register("memory_link", h.memoryLink)
-	s.Register("memory_related", h.memoryRelated)
-	s.Register("memory_search", h.memorySearch)
-	s.Register("memory_graph", h.memoryGraph)
+	s.Register("context_connect", h.contextConnect)
+	s.Register("context_web", h.contextWeb)
+	s.Register("context_search", h.contextSearch)
+	s.Register("context_map", h.contextMap)
 }

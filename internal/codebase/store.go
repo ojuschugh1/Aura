@@ -7,14 +7,14 @@ import (
 	"github.com/ojuschugh1/aura/internal/memory"
 )
 
-// StoreResult persists scan results as memory entries with the "codebase-scan" source_tool.
+// StoreResult persists scan results as memory entries with the "aura-awareness" source_tool.
 func StoreResult(store *memory.Store, result *ScanResult, sessionID string) (int, error) {
 	entries := map[string]string{
-		"codebase.languages":    strings.Join(result.Languages, ", "),
-		"codebase.entry_points": strings.Join(result.EntryPoints, ", "),
-		"codebase.packages":     strings.Join(result.Packages, ", "),
-		"codebase.dependencies": strings.Join(result.Dependencies, ", "),
-		"codebase.stats":        fmt.Sprintf("%d files, %d lines", result.FileCount, result.TotalLines),
+		"aura.project.languages":    strings.Join(result.Languages, ", "),
+		"aura.project.entry_points": strings.Join(result.EntryPoints, ", "),
+		"aura.project.packages":     strings.Join(result.Packages, ", "),
+		"aura.project.dependencies": strings.Join(result.Dependencies, ", "),
+		"aura.project.stats":        fmt.Sprintf("%d files, %d lines", result.FileCount, result.TotalLines),
 	}
 
 	stored := 0
@@ -22,7 +22,7 @@ func StoreResult(store *memory.Store, result *ScanResult, sessionID string) (int
 		if value == "" {
 			value = "(none)"
 		}
-		_, err := store.AddWithMeta(key, value, "codebase-scan", sessionID, 1.0, nil)
+		_, err := store.AddWithMeta(key, value, "aura-awareness", sessionID, 1.0, nil)
 		if err != nil {
 			return stored, fmt.Errorf("store %s: %w", key, err)
 		}

@@ -45,11 +45,11 @@ func TestStoreResult_StoresAllKeys(t *testing.T) {
 
 	// Verify each key.
 	keys := []string{
-		"codebase.languages",
-		"codebase.entry_points",
-		"codebase.packages",
-		"codebase.dependencies",
-		"codebase.stats",
+		"aura.project.languages",
+		"aura.project.entry_points",
+		"aura.project.packages",
+		"aura.project.dependencies",
+		"aura.project.stats",
 	}
 	for _, key := range keys {
 		entry, err := store.Get(key)
@@ -57,8 +57,8 @@ func TestStoreResult_StoresAllKeys(t *testing.T) {
 			t.Errorf("Get(%q): %v", key, err)
 			continue
 		}
-		if entry.SourceTool != "codebase-scan" {
-			t.Errorf("key %q: SourceTool = %q, want %q", key, entry.SourceTool, "codebase-scan")
+		if entry.SourceTool != "aura-awareness" {
+			t.Errorf("key %q: SourceTool = %q, want %q", key, entry.SourceTool, "aura-awareness")
 		}
 		if entry.Confidence != 1.0 {
 			t.Errorf("key %q: Confidence = %f, want 1.0", key, entry.Confidence)
@@ -79,9 +79,9 @@ func TestStoreResult_EmptyResult(t *testing.T) {
 		t.Errorf("expected 5 stored entries even for empty result, got %d", n)
 	}
 
-	entry, err := store.Get("codebase.stats")
+	entry, err := store.Get("aura.project.stats")
 	if err != nil {
-		t.Fatalf("Get codebase.stats: %v", err)
+		t.Fatalf("Get aura.project.stats: %v", err)
 	}
 	if entry.Value != "0 files, 0 lines" {
 		t.Errorf("stats = %q, want %q", entry.Value, "0 files, 0 lines")
@@ -102,9 +102,9 @@ func TestReconcileCodebase_UpdatesEntries(t *testing.T) {
 		t.Errorf("expected 5 stored entries, got %d", n)
 	}
 
-	entry, err := store.Get("codebase.languages")
+	entry, err := store.Get("aura.project.languages")
 	if err != nil {
-		t.Fatalf("Get codebase.languages: %v", err)
+		t.Fatalf("Get aura.project.languages: %v", err)
 	}
 	if entry.Value != "Go" {
 		t.Errorf("languages = %q, want %q", entry.Value, "Go")

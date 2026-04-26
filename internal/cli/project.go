@@ -13,18 +13,18 @@ import (
 func NewProjectCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "project",
-		Short: "Codebase structure awareness",
+		Short: "Project awareness and structure mapping",
 	}
-	cmd.AddCommand(newProjectScanCmd(auraDir, jsonOut))
-	cmd.AddCommand(newProjectInfoCmd(auraDir, jsonOut))
+	cmd.AddCommand(newProjectMapCmd(auraDir, jsonOut))
+	cmd.AddCommand(newProjectOverviewCmd(auraDir, jsonOut))
 	return cmd
 }
 
-func newProjectScanCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+func newProjectMapCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	var projectDir string
 	cmd := &cobra.Command{
-		Use:   "scan",
-		Short: "Scan and store project structure",
+		Use:   "map",
+		Short: "Map your project structure into Aura's memory",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := projectDir
 			if dir == "" {
@@ -54,13 +54,13 @@ func newProjectScanCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 				})
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Scanned %s:\n", dir)
+			fmt.Fprintf(cmd.OutOrStdout(), "Aura mapped %s:\n", dir)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Languages:    %v\n", result.Languages)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Entry points: %v\n", result.EntryPoints)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Packages:     %d top-level dirs\n", len(result.Packages))
 			fmt.Fprintf(cmd.OutOrStdout(), "  Dependencies: %d\n", len(result.Dependencies))
 			fmt.Fprintf(cmd.OutOrStdout(), "  Files:        %d (%d lines)\n", result.FileCount, result.TotalLines)
-			fmt.Fprintf(cmd.OutOrStdout(), "Stored %d memory entries.\n", n)
+			fmt.Fprintf(cmd.OutOrStdout(), "Stored %d context entries in Aura's memory.\n", n)
 			return nil
 		},
 	}
@@ -68,10 +68,10 @@ func newProjectScanCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	return cmd
 }
 
-func newProjectInfoCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+func newProjectOverviewCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	return &cobra.Command{
-		Use:   "info",
-		Short: "Show stored project structure",
+		Use:   "overview",
+		Short: "Show Aura's understanding of your project",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, close, err := openStore(*auraDir)
 			if err != nil {
@@ -80,11 +80,11 @@ func newProjectInfoCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 			defer close()
 
 			keys := []string{
-				"codebase.languages",
-				"codebase.entry_points",
-				"codebase.packages",
-				"codebase.dependencies",
-				"codebase.stats",
+				"aura.project.languages",
+				"aura.project.entry_points",
+				"aura.project.packages",
+				"aura.project.dependencies",
+				"aura.project.stats",
 			}
 
 			info := make(map[string]string)
@@ -101,16 +101,16 @@ func newProjectInfoCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 			}
 
 			if len(info) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no project info stored; run 'aura project scan' first")
+				fmt.Fprintln(cmd.OutOrStdout(), "no project map found — run 'aura project map' first")
 				return nil
 			}
 
 			labels := map[string]string{
-				"codebase.languages":    "Languages",
-				"codebase.entry_points": "Entry Points",
-				"codebase.packages":     "Packages",
-				"codebase.dependencies": "Dependencies",
-				"codebase.stats":        "Stats",
+				"aura.project.languages":    "Languages",
+				"aura.project.entry_points": "Entry Points",
+				"aura.project.packages":     "Packages",
+				"aura.project.dependencies": "Dependencies",
+				"aura.project.stats":        "Stats",
 			}
 			for _, key := range keys {
 				if val, ok := info[key]; ok {

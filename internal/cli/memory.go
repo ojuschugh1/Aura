@@ -22,9 +22,9 @@ func NewMemoryCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	cmd.AddCommand(newMemoryRmCmd(auraDir))
 	cmd.AddCommand(newMemoryExportCmd(auraDir))
 	cmd.AddCommand(newMemoryImportCmd(auraDir))
-	cmd.AddCommand(newMemoryLinkCmd(auraDir, jsonOut))
-	cmd.AddCommand(newMemoryUnlinkCmd(auraDir))
-	cmd.AddCommand(newMemoryRelatedCmd(auraDir, jsonOut))
+	cmd.AddCommand(newMemoryConnectCmd(auraDir, jsonOut))
+	cmd.AddCommand(newMemoryDisconnectCmd(auraDir))
+	cmd.AddCommand(newMemoryWebCmd(auraDir, jsonOut))
 	cmd.AddCommand(newMemorySearchCmd(auraDir, jsonOut))
 	cmd.AddCommand(newMemoryTagCmd(auraDir))
 	return cmd
@@ -215,12 +215,12 @@ func newMemoryImportCmd(auraDir *string) *cobra.Command {
 	return cmd
 }
 
-func newMemoryLinkCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+func newMemoryConnectCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	var relation string
 	var confidence float64
 	cmd := &cobra.Command{
-		Use:   "link <from> <to>",
-		Short: "Create a relationship between two memory entries",
+		Use:   "connect <from> <to>",
+		Short: "Connect two memories with a typed relationship",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, close, err := openStore(*auraDir)
@@ -236,21 +236,21 @@ func newMemoryLinkCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 			if *jsonOut {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(edge)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "linked: %s -[%s]-> %s (confidence: %.2f)\n",
+			fmt.Fprintf(cmd.OutOrStdout(), "connected: %s —[%s]→ %s (confidence: %.2f)\n",
 				edge.FromKey, edge.Relation, edge.ToKey, edge.Confidence)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relation, "relation", "related-to", "Relationship type (depends-on, includes, related-to, contradicts, supersedes)")
+	cmd.Flags().StringVar(&relation, "relation", "related-to", "Connection type (depends-on, includes, related-to, contradicts, supersedes)")
 	cmd.Flags().Float64Var(&confidence, "confidence", 1.0, "Confidence score (0.0-1.0)")
 	return cmd
 }
 
-func newMemoryUnlinkCmd(auraDir *string) *cobra.Command {
+func newMemoryDisconnectCmd(auraDir *string) *cobra.Command {
 	var relation string
 	cmd := &cobra.Command{
-		Use:   "unlink <from> <to>",
-		Short: "Remove a relationship between two memory entries",
+		Use:   "disconnect <from> <to>",
+		Short: "Remove a connection between two memories",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, close, err := openStore(*auraDir)
@@ -262,18 +262,18 @@ func newMemoryUnlinkCmd(auraDir *string) *cobra.Command {
 			if err := store.DeleteEdge(args[0], args[1], relation); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "unlinked: %s -[%s]-> %s\n", args[0], relation, args[1])
+			fmt.Fprintf(cmd.OutOrStdout(), "disconnected: %s —[%s]→ %s\n", args[0], relation, args[1])
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relation, "relation", "related-to", "Relationship type to remove")
+	cmd.Flags().StringVar(&relation, "relation", "related-to", "Connection type to remove")
 	return cmd
 }
 
-func newMemoryRelatedCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+func newMemoryWebCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	return &cobra.Command{
-		Use:   "related <key>",
-		Short: "Show all entries connected to a key with their relationships",
+		Use:   "web <key>",
+		Short: "Show the web of connections around a memory",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, close, err := openStore(*auraDir)
@@ -299,18 +299,18 @@ func newMemoryRelatedCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 			}
 
 			if len(edges) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no relationships found")
+				fmt.Fprintln(cmd.OutOrStdout(), "no connections found")
 				return nil
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Relationships for %q:\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "Context web for %q:\n", args[0])
 			for _, e := range edges {
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s -[%s]-> %s (confidence: %.2f)\n",
 					e.FromKey, e.Relation, e.ToKey, e.Confidence)
 			}
 
 			if len(entries) > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "\nConnected entries:\n")
+				fmt.Fprintf(cmd.OutOrStdout(), "\nLinked context:\n")
 				for _, e := range entries {
 					val := e.Value
 					if len(val) > 60 {

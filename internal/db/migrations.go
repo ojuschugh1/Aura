@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS wiki_log (
 	{"idx_wiki_log_action", "CREATE INDEX IF NOT EXISTS idx_wiki_log_action ON wiki_log(action)"},
 	{"idx_wiki_log_timestamp", "CREATE INDEX IF NOT EXISTS idx_wiki_log_timestamp ON wiki_log(timestamp)"},
 
-	// Knowledge graph edges (Graphify).
+	// Context connections — typed relationships between memory entries.
 	{"memory_edges", `
 CREATE TABLE IF NOT EXISTS memory_edges (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

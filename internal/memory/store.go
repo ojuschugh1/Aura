@@ -110,7 +110,7 @@ func (s *Store) Delete(key string) error {
 	return nil
 }
 
-// --- Edge operations (knowledge graph) --------------------------------------
+// --- Context connections ----------------------------------------------------
 
 // AddEdge creates or updates a directed edge between two memory keys.
 func (s *Store) AddEdge(fromKey, toKey, relation, sourceTool, sessionID string, confidence float64) (*types.MemoryEdge, error) {

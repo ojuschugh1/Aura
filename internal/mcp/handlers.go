@@ -650,9 +650,9 @@ func (h *handlers) wikiIngestURL(_ context.Context, params map[string]interface{
 	return result, nil
 }
 
-// --- Graph and search handlers ---
+// --- Context connection and search handlers ---
 
-func (h *handlers) memoryLink(_ context.Context, params map[string]interface{}) (interface{}, error) {
+func (h *handlers) contextConnect(_ context.Context, params map[string]interface{}) (interface{}, error) {
 	fromKey, ok := stringParam(params, "from_key")
 	if !ok {
 		return nil, fmt.Errorf("INVALID_PARAMS: from_key is required")
@@ -685,7 +685,7 @@ func (h *handlers) memoryLink(_ context.Context, params map[string]interface{}) 
 	return edge, nil
 }
 
-func (h *handlers) memoryRelated(_ context.Context, params map[string]interface{}) (interface{}, error) {
+func (h *handlers) contextWeb(_ context.Context, params map[string]interface{}) (interface{}, error) {
 	key, ok := stringParam(params, "key")
 	if !ok {
 		return nil, fmt.Errorf("INVALID_PARAMS: key is required")
@@ -707,7 +707,7 @@ func (h *handlers) memoryRelated(_ context.Context, params map[string]interface{
 	}, nil
 }
 
-func (h *handlers) memorySearch(_ context.Context, params map[string]interface{}) (interface{}, error) {
+func (h *handlers) contextSearch(_ context.Context, params map[string]interface{}) (interface{}, error) {
 	query, ok := stringParam(params, "query")
 	if !ok {
 		return nil, fmt.Errorf("INVALID_PARAMS: query is required")
@@ -720,7 +720,7 @@ func (h *handlers) memorySearch(_ context.Context, params map[string]interface{}
 	return entries, nil
 }
 
-func (h *handlers) memoryGraph(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+func (h *handlers) contextMap(_ context.Context, _ map[string]interface{}) (interface{}, error) {
 	entries, err := h.store.List(memory.ListFilter{})
 	if err != nil {
 		return nil, err
