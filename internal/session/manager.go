@@ -9,9 +9,10 @@ import (
 
 // Manager manages session lifecycle backed by SQLite.
 type Manager struct {
-	mu      sync.RWMutex
-	db      *sql.DB
-	current *types.Session
+	mu        sync.RWMutex
+	db        *sql.DB
+	current   *types.Session
+	onEndHook func(sessionID string)
 }
 
 // New creates a Manager using the provided database connection.
@@ -44,16 +45,30 @@ func (m *Manager) Get(id string) (*types.Session, error) {
 	return get(m.db, id)
 }
 
-// End marks the session with the given ID as completed.
-func (m *Manager) End(id string) error {
+// SetOnEndHook registers a callback that fires after a session ends.
+// The hook receives the session ID and runs outside the manager's lock.
+func (m *Manager) SetOnEndHook(hook func(sessionID string)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.onEndHook = hook
+}
 
+// End marks the session with the given ID as completed.
+// If an on-end hook is registered, it is called after the session is ended.
+func (m *Manager) End(id string) error {
+	m.mu.Lock()
 	if err := end(m.db, id); err != nil {
+		m.mu.Unlock()
 		return err
 	}
 	if m.current != nil && m.current.ID == id {
 		m.current = nil
+	}
+	hook := m.onEndHook
+	m.mu.Unlock()
+
+	if hook != nil {
+		hook(id)
 	}
 	return nil
 }
