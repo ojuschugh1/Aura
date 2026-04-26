@@ -9,6 +9,7 @@ import (
 
 	auradb "github.com/ojuschugh1/aura/internal/db"
 	"github.com/ojuschugh1/aura/internal/wiki"
+	"github.com/ojuschugh1/aura/pkg/types"
 	"github.com/spf13/cobra"
 )
 
@@ -41,6 +42,11 @@ instead of being re-derived on every query.`,
 	cmd.AddCommand(newWikiContextCmd(auraDir, jsonOut))
 	cmd.AddCommand(newWikiVizCmd(auraDir, jsonOut))
 	cmd.AddCommand(newWikiWatchCmd(auraDir))
+	cmd.AddCommand(newWikiMetabolizeCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiAccessCmd(auraDir))
+	cmd.AddCommand(newWikiAuditCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiVerifyChainCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiPressureCmd(auraDir, jsonOut))
 	return cmd
 }
 
@@ -1084,6 +1090,208 @@ func newWikiWatchCmd(auraDir *string) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "[auto] %s → %d created, %d updated\n",
 					filepath.Base(path), len(result.PagesCreated), len(result.PagesUpdated))
 			})
+		},
+	}
+}
+
+func newWikiMetabolizeCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "metabolize",
+		Short: "Run a knowledge lifecycle pass — decay, consolidate, check pressure",
+		Long: `Metabolize treats your wiki as a living organism. Pages that aren't
+accessed or refreshed gradually lose vitality. Pages with accumulated
+contradictions trigger revision alerts. Overlapping pages are flagged
+for consolidation. Run periodically to keep the wiki healthy.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			cfg := wiki.DefaultMetabolismConfig()
+			result, err := engine.Metabolize(cfg)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "metabolism complete:\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "  decayed:      %d pages\n", result.PagesDecayed)
+			fmt.Fprintf(cmd.OutOrStdout(), "  consolidate:  %d candidates\n", result.PagesConsolidated)
+			fmt.Fprintf(cmd.OutOrStdout(), "  archive:      %d candidates\n", result.PagesArchived)
+			fmt.Fprintf(cmd.OutOrStdout(), "  pressure:     %d alerts\n", len(result.PressureAlerts))
+
+			if len(result.PressureAlerts) > 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "\npressure alerts:")
+				for _, a := range result.PressureAlerts {
+					fmt.Fprintf(cmd.OutOrStdout(), "  ⚠ %s\n", a.Message)
+				}
+			}
+
+			if len(result.Suggestions) > 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "\nsuggestions:")
+				for _, s := range result.Suggestions {
+					fmt.Fprintf(cmd.OutOrStdout(), "  [%s] %s\n", s.Type, s.Message)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func newWikiAccessCmd(auraDir *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "access <slug> <tier>",
+		Short: "Set access tier for a page (public, team, private)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			if err := engine.Store().SetAccessTier(args[0], args[1]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "access tier for %s set to %s\n", args[0], args[1])
+			return nil
+		},
+	}
+}
+
+func newWikiAuditCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "audit [slug]",
+		Short: "Show the immutable audit trail for a page or the entire wiki",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			var entries []*types.WikiAuditEntry
+			if len(args) > 0 {
+				entries, err = engine.Audit().History(args[0], limit)
+			} else {
+				entries, err = engine.Audit().FullHistory(limit)
+			}
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(entries)
+			}
+
+			if len(entries) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no audit entries")
+				return nil
+			}
+
+			for _, e := range entries {
+				fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s %s by %s — %s (hash: %s…)\n",
+					e.CreatedAt.Format("2006-01-02 15:04"),
+					e.Action, e.PageSlug, e.Agent, e.Summary,
+					truncateStr(e.EntryHash, 12))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 50, "Number of audit entries to show")
+	return cmd
+}
+
+func newWikiVerifyChainCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "verify-chain",
+		Short: "Verify the integrity of the audit chain (tamper detection)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			result, err := engine.Audit().VerifyChain()
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "audit chain: %d entries\n", result.TotalEntries)
+			fmt.Fprintf(cmd.OutOrStdout(), "verified:    %d\n", result.Verified)
+			if result.Intact {
+				fmt.Fprintln(cmd.OutOrStdout(), "status:      ✓ intact")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "status:      ✗ BROKEN at entry #%d\n", *result.BrokenAt)
+				fmt.Fprintf(cmd.OutOrStdout(), "detail:      %s\n", result.BrokenMessage)
+			}
+			return nil
+		},
+	}
+}
+
+func newWikiPressureCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "pressure [slug]",
+		Short: "Show accumulated contradiction pressure on pages",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			if len(args) > 0 {
+				entries, err := engine.Store().GetPressure(args[0])
+				if err != nil {
+					return err
+				}
+				if *jsonOut {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(entries)
+				}
+				if len(entries) == 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "no pressure on %s\n", args[0])
+					return nil
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "pressure on %s (%d entries):\n\n", args[0], len(entries))
+				for _, p := range entries {
+					fmt.Fprintf(cmd.OutOrStdout(), "  [%s] from %s: %s\n",
+						p.PressureType, p.SourceSlug, p.Evidence)
+				}
+				return nil
+			}
+
+			// Show all pages under pressure.
+			cfg := wiki.DefaultMetabolismConfig()
+			result, err := engine.Metabolize(cfg)
+			if err != nil {
+				return err
+			}
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result.PressureAlerts)
+			}
+			if len(result.PressureAlerts) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no pressure alerts")
+				return nil
+			}
+			for _, a := range result.PressureAlerts {
+				fmt.Fprintf(cmd.OutOrStdout(), "⚠ %s (%d contradictions from %s)\n",
+					a.TargetSlug, a.PressureCount, strings.Join(a.Sources, ", "))
+			}
+			return nil
 		},
 	}
 }
