@@ -193,7 +193,7 @@ func newWikiIngestCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "Source title (default: filename or first 50 chars)")
 	cmd.Flags().StringVar(&format, "format", "", "Source format: markdown, text, jsonl (auto-detected)")
-	cmd.Flags().StringVar(&dir, "dir", "", "Batch ingest all supported files from a directory")
+	cmd.Flags().StringVar(&dir, "batch", "", "Batch ingest all supported files from a directory")
 	return cmd
 }
 
