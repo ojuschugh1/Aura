@@ -874,3 +874,189 @@ func TestIngestToolJSON(t *testing.T) {
 		t.Error("expected tool name in page content")
 	}
 }
+
+// --- Schema, suggestions, filter, URL tests ---
+
+func TestGenerateSchema(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	// Add some pages so the schema has stats.
+	_, _ = store.CreatePage("postgresql", "PostgreSQL", "A relational database.", "entity", []string{"db"}, nil, nil)
+	_, _ = store.CreatePage("architecture", "Architecture Overview", "Event sourcing.", "concept", nil, nil, nil)
+
+	tests := []struct {
+		format SchemaFormat
+		expect string
+	}{
+		{SchemaClaudeCode, "CLAUDE.md"},
+		{SchemaCodex, "AGENTS.md"},
+		{SchemaKiro, "inclusion: auto"},
+		{SchemaGeneric, "Wiki Schema"},
+	}
+
+	for _, tt := range tests {
+		schema := engine.GenerateSchema(tt.format)
+		if !strings.Contains(schema, tt.expect) {
+			t.Errorf("schema(%v) should contain %q", tt.format, tt.expect)
+		}
+		// All schemas should contain the core sections.
+		if !strings.Contains(schema, "## Architecture") {
+			t.Errorf("schema(%v) missing Architecture section", tt.format)
+		}
+		if !strings.Contains(schema, "## Workflows") {
+			t.Errorf("schema(%v) missing Workflows section", tt.format)
+		}
+		if !strings.Contains(schema, "wiki_ingest") {
+			t.Errorf("schema(%v) missing MCP tool reference", tt.format)
+		}
+		if !strings.Contains(schema, "**Pages:** 2") {
+			t.Errorf("schema(%v) should show 2 pages", tt.format)
+		}
+	}
+}
+
+func TestLintSuggestions(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+	engine := NewEngine(store)
+
+	// Create a page with a missing link and no sources.
+	_, _ = store.CreatePage("page-a", "Page A", "Content about PostgreSQL and Redis.",
+		"entity", nil, nil, []string{"missing-page"})
+	// Create a large page.
+	bigContent := strings.Repeat("word ", 600)
+	_, _ = store.CreatePage("big-page", "Big Page", bigContent, "entity", nil, nil, nil)
+
+	result, err := engine.Lint()
+	if err != nil {
+		t.Fatalf("lint: %v", err)
+	}
+
+	if len(result.Suggestions) == 0 {
+		t.Fatal("expected suggestions from lint")
+	}
+
+	// Check for specific suggestion types.
+	types := make(map[string]bool)
+	for _, s := range result.Suggestions {
+		types[s.Type] = true
+	}
+
+	if !types["create_page"] {
+		t.Error("expected create_page suggestion for missing-page")
+	}
+	if !types["split_page"] {
+		t.Error("expected split_page suggestion for big-page")
+	}
+	if !types["add_source"] {
+		t.Error("expected add_source suggestion for pages without sources")
+	}
+}
+
+func TestParseFilter(t *testing.T) {
+	tests := []struct {
+		input    string
+		field    string
+		operator string
+		value    string
+	}{
+		{"category=entity", "category", "=", "entity"},
+		{"tags contains api", "tags", "contains", "api"},
+		{"link_count>3", "link_count", ">", "3"},
+		{"updated>=2026-01-01", "updated", ">=", "2026-01-01"},
+		{"category!=source", "category", "!=", "source"},
+	}
+
+	for _, tt := range tests {
+		f, err := ParseFilter(tt.input)
+		if err != nil {
+			t.Errorf("ParseFilter(%q): %v", tt.input, err)
+			continue
+		}
+		if f.Field != tt.field {
+			t.Errorf("field = %q, want %q", f.Field, tt.field)
+		}
+		if f.Operator != tt.operator {
+			t.Errorf("operator = %q, want %q", f.Operator, tt.operator)
+		}
+		if f.Value != tt.value {
+			t.Errorf("value = %q, want %q", f.Value, tt.value)
+		}
+	}
+}
+
+func TestFilterPages(t *testing.T) {
+	db := setupTestDB(t)
+	store := NewStore(db)
+
+	_, _ = store.CreatePage("pg", "PostgreSQL", "A database.", "entity", []string{"db", "sql"}, []int64{1}, nil)
+	_, _ = store.CreatePage("redis", "Redis", "A cache.", "entity", []string{"cache"}, nil, nil)
+	_, _ = store.CreatePage("arch", "Architecture", "Overview.", "concept", nil, nil, nil)
+
+	pages, _ := store.ListPages("")
+
+	// Filter by category.
+	filters, _ := ParseFilters("category=entity")
+	matched, _ := FilterPages(pages, filters)
+	if len(matched) != 2 {
+		t.Errorf("category=entity: got %d, want 2", len(matched))
+	}
+
+	// Filter by tags.
+	filters, _ = ParseFilters("tags contains db")
+	matched, _ = FilterPages(pages, filters)
+	if len(matched) != 1 {
+		t.Errorf("tags contains db: got %d, want 1", len(matched))
+	}
+
+	// Filter by source_count.
+	filters, _ = ParseFilters("source_count>0")
+	matched, _ = FilterPages(pages, filters)
+	if len(matched) != 1 {
+		t.Errorf("source_count>0: got %d, want 1", len(matched))
+	}
+
+	// Combined filter.
+	filters, _ = ParseFilters("category=entity AND tags contains cache")
+	matched, _ = FilterPages(pages, filters)
+	if len(matched) != 1 || matched[0].Slug != "redis" {
+		t.Errorf("combined filter: got %d, want 1 (redis)", len(matched))
+	}
+}
+
+func TestHTMLToText(t *testing.T) {
+	html := `<html><head><title>Test Page</title></head><body>
+<h1>Hello World</h1>
+<p>This is a <strong>test</strong> paragraph with a <a href="https://example.com">link</a>.</p>
+<script>var x = 1;</script>
+<ul><li>Item one</li><li>Item two</li></ul>
+</body></html>`
+
+	text := htmlToText(html)
+
+	if !strings.Contains(text, "# Hello World") {
+		t.Error("expected h1 converted to markdown header")
+	}
+	if !strings.Contains(text, "**test**") {
+		t.Error("expected strong converted to bold")
+	}
+	if !strings.Contains(text, "[link](https://example.com)") {
+		t.Error("expected anchor converted to markdown link")
+	}
+	if strings.Contains(text, "var x = 1") {
+		t.Error("script content should be stripped")
+	}
+	if !strings.Contains(text, "- Item one") {
+		t.Error("expected list items converted")
+	}
+}
+
+func TestExtractHTMLTitle(t *testing.T) {
+	html := `<html><head><title>My Article &amp; More</title></head><body></body></html>`
+	title := extractHTMLTitle(html)
+	if title != "My Article & More" {
+		t.Errorf("title = %q, want %q", title, "My Article & More")
+	}
+}
