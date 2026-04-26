@@ -1,0 +1,478 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	auradb "github.com/ojuschugh1/aura/internal/db"
+	"github.com/ojuschugh1/aura/internal/wiki"
+	"github.com/spf13/cobra"
+)
+
+// NewWikiCmd returns the `aura wiki` command with all subcommands.
+func NewWikiCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "wiki",
+		Short: "LLM-maintained knowledge base — ingest, query, lint, browse",
+		Long: `The wiki is a persistent, compounding knowledge base maintained by your AI tools.
+Sources are ingested once and compiled into interlinked pages. Knowledge accumulates
+instead of being re-derived on every query.`,
+	}
+	cmd.AddCommand(newWikiIngestCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiQueryCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiLintCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiLsCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiShowCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiSearchCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiLogCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiIndexCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiRmCmd(auraDir))
+	cmd.AddCommand(newWikiSourcesCmd(auraDir, jsonOut))
+	return cmd
+}
+
+func openWikiEngine(auraDir string) (*wiki.Engine, func(), error) {
+	dbPath := filepath.Join(auraDir, "aura.db")
+	database, err := auradb.Open(dbPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open db: %w", err)
+	}
+	if err := auradb.RunMigrations(database); err != nil {
+		database.Close()
+		return nil, nil, fmt.Errorf("migrate db: %w", err)
+	}
+	store := wiki.NewStore(database)
+	engine := wiki.NewEngine(store)
+	return engine, func() { database.Close() }, nil
+}
+
+func newWikiIngestCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	var title, format string
+	cmd := &cobra.Command{
+		Use:   "ingest <file-or-text>",
+		Short: "Ingest a source into the wiki (file path or inline text)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			input := strings.Join(args, " ")
+			origin := ""
+			content := input
+
+			// Check if input is a file path.
+			if info, err := os.Stat(input); err == nil && !info.IsDir() {
+				data, err := os.ReadFile(input)
+				if err != nil {
+					return fmt.Errorf("read file: %w", err)
+				}
+				content = string(data)
+				origin = input
+				if title == "" {
+					title = filepath.Base(input)
+				}
+				if format == "" {
+					ext := strings.ToLower(filepath.Ext(input))
+					switch ext {
+					case ".md", ".markdown":
+						format = "markdown"
+					case ".txt":
+						format = "text"
+					case ".jsonl":
+						format = "jsonl"
+					default:
+						format = "text"
+					}
+				}
+			} else {
+				if title == "" {
+					// Use first 50 chars as title.
+					title = content
+					if len(title) > 50 {
+						title = title[:50] + "…"
+					}
+				}
+				if format == "" {
+					format = "text"
+				}
+			}
+
+			result, err := engine.Ingest(title, content, format, origin)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			if result.Duplicate {
+				fmt.Fprintf(cmd.OutOrStdout(), "duplicate: source already ingested (id %d)\n", result.SourceID)
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "ingested: %s (source #%d)\n", result.SourceTitle, result.SourceID)
+			if len(result.PagesCreated) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "created:  %s\n", strings.Join(result.PagesCreated, ", "))
+			}
+			if len(result.PagesUpdated) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "updated:  %s\n", strings.Join(result.PagesUpdated, ", "))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&title, "title", "", "Source title (default: filename or first 50 chars)")
+	cmd.Flags().StringVar(&format, "format", "", "Source format: markdown, text, jsonl (auto-detected)")
+	return cmd
+}
+
+func newWikiQueryCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "query <search-terms>",
+		Short: "Search the wiki and get a synthesised answer",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			query := strings.Join(args, " ")
+			result, err := engine.Query(query)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			if result.PageCount == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "no pages found matching %q\n", query)
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "found %d page(s):\n\n", result.PageCount)
+			fmt.Fprintln(cmd.OutOrStdout(), result.Answer)
+			return nil
+		},
+	}
+}
+
+func newWikiLintCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "lint",
+		Short: "Health-check the wiki for orphans, stale pages, and missing references",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			result, err := engine.Lint()
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "pages:   %d\n", result.TotalPages)
+			fmt.Fprintf(cmd.OutOrStdout(), "sources: %d\n", result.TotalSources)
+			fmt.Fprintf(cmd.OutOrStdout(), "health:  %.0f%%\n", result.HealthScore*100)
+			fmt.Fprintln(cmd.OutOrStdout())
+
+			if len(result.Orphans) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "orphans (%d):\n", len(result.Orphans))
+				for _, o := range result.Orphans {
+					fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", o)
+				}
+			}
+			if len(result.Stale) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "stale (%d):\n", len(result.Stale))
+				for _, s := range result.Stale {
+					fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", s)
+				}
+			}
+			if len(result.MissingPages) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "missing references (%d):\n", len(result.MissingPages))
+				for _, m := range result.MissingPages {
+					fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", m)
+				}
+			}
+			if len(result.Orphans) == 0 && len(result.Stale) == 0 && len(result.MissingPages) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no issues found")
+			}
+			return nil
+		},
+	}
+}
+
+func newWikiLsCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	var category string
+	cmd := &cobra.Command{
+		Use:   "ls",
+		Short: "List all wiki pages",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			pages, err := engine.Store().ListPages(category)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(pages)
+			}
+
+			if len(pages) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no wiki pages")
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-12s %-20s %s\n", "SLUG", "CATEGORY", "UPDATED", "TITLE")
+			for _, p := range pages {
+				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-12s %-20s %s\n",
+					truncateStr(p.Slug, 30), p.Category,
+					p.UpdatedAt.Format("2006-01-02 15:04"), p.Title)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&category, "category", "", "Filter by category (entity, concept, source, synthesis)")
+	return cmd
+}
+
+func newWikiShowCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "show <slug>",
+		Short: "Show the full content of a wiki page",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			page, err := engine.Store().GetPage(args[0])
+			if err != nil {
+				return fmt.Errorf("page %q not found", args[0])
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(page)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "slug:     %s\n", page.Slug)
+			fmt.Fprintf(cmd.OutOrStdout(), "title:    %s\n", page.Title)
+			fmt.Fprintf(cmd.OutOrStdout(), "category: %s\n", page.Category)
+			if len(page.Tags) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "tags:     %s\n", strings.Join(page.Tags, ", "))
+			}
+			if len(page.LinksSlugs) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "links:    %s\n", strings.Join(page.LinksSlugs, ", "))
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "updated:  %s\n", page.UpdatedAt.Format("2006-01-02 15:04:05"))
+			fmt.Fprintln(cmd.OutOrStdout())
+			fmt.Fprintln(cmd.OutOrStdout(), page.Content)
+			return nil
+		},
+	}
+}
+
+func newWikiSearchCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search wiki pages by title and content",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			query := strings.Join(args, " ")
+			pages, err := engine.Store().SearchPages(query)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(pages)
+			}
+
+			if len(pages) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "no pages matching %q\n", query)
+				return nil
+			}
+
+			for _, p := range pages {
+				excerpt := p.Content
+				if len(excerpt) > 80 {
+					excerpt = excerpt[:80] + "…"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%-25s [%s] %s\n", p.Slug, p.Category, excerpt)
+			}
+			return nil
+		},
+	}
+}
+
+func newWikiLogCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "log",
+		Short: "Show the wiki activity log",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			entries, err := engine.Store().RecentLog(limit)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(entries)
+			}
+
+			if len(entries) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no log entries")
+				return nil
+			}
+
+			for _, e := range entries {
+				fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s — %s\n",
+					e.Timestamp.Format("2006-01-02 15:04"), e.Action, e.Summary)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 20, "Number of log entries to show")
+	return cmd
+}
+
+func newWikiIndexCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "index",
+		Short: "Show the wiki index (catalog of all pages)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			idx, err := engine.Store().BuildIndex()
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(idx)
+			}
+
+			if len(idx.Entries) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "wiki is empty")
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%-25s %-12s %5s %s\n", "SLUG", "CATEGORY", "LINKS", "SUMMARY")
+			for _, e := range idx.Entries {
+				summary := e.Summary
+				if len(summary) > 50 {
+					summary = summary[:50] + "…"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%-25s %-12s %5d %s\n",
+					truncateStr(e.Slug, 25), e.Category, e.Links, summary)
+			}
+			return nil
+		},
+	}
+}
+
+func newWikiRmCmd(auraDir *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <slug>",
+		Short: "Delete a wiki page by slug",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			if err := engine.Store().DeletePage(args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "deleted: %s\n", args[0])
+			return nil
+		},
+	}
+}
+
+func newWikiSourcesCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "sources",
+		Short: "List all ingested raw sources",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			sources, err := engine.Store().ListSources()
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(sources)
+			}
+
+			if len(sources) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no sources ingested")
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%5s %-30s %-10s %-20s %s\n", "ID", "TITLE", "FORMAT", "INGESTED", "ORIGIN")
+			for _, s := range sources {
+				title := s.Title
+				if len(title) > 30 {
+					title = title[:27] + "…"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%5d %-30s %-10s %-20s %s\n",
+					s.ID, title, s.Format,
+					s.IngestedAt.Format("2006-01-02 15:04"), s.Origin)
+			}
+			return nil
+		},
+	}
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-1] + "…"
+}

@@ -2,9 +2,9 @@
 
 **Your AI remembers what it did, and proves it.**
 
-Aura is a local-first daemon that gives every AI tool you use — Claude Code, Cursor, Kiro, Gemini CLI — persistent memory, claim verification, token compression, and dependency scanning. One binary. Zero cloud. Works across tools.
+Aura is a local-first daemon that gives every AI tool you use — Claude Code, Cursor, Kiro, Gemini CLI — persistent memory, claim verification, token compression, dependency scanning, and a compounding knowledge wiki. One binary. Zero cloud. Works across tools.
 
-**Current status: v0.6-dev** — 18 packages, ~14,600 lines of Go, 403 passing tests.
+**Current status: v0.7-dev** — 19 packages, 414 passing tests.
 
 ---
 
@@ -14,7 +14,9 @@ You use Claude Code in the morning, switch to Cursor after lunch, and ask ChatGP
 
 And when the AI says "I created the file and installed the package" — did it actually? You have no way to know without checking yourself.
 
-Aura fixes both.
+And the knowledge you build up — decisions, research, context — it's scattered across chat histories that disappear. Nothing compounds. Every session starts from scratch.
+
+Aura fixes all three.
 
 ## What it does
 
@@ -85,6 +87,33 @@ aura replay <session_id>         # replay and diff
 
 **Auto-capture** — Automatically extracts decisions from AI sessions ("we decided to use PostgreSQL", "going with microservices") and stores them in memory without manual effort.
 
+**Knowledge wiki** — A persistent, compounding knowledge base maintained by your AI tools. Ingest sources once, and Aura builds interlinked pages — summaries, entity pages, concept pages — that get richer with every source you add and every question you ask. Inspired by [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
+
+```
+aura wiki ingest design.md        # ingest a source document
+# ingested: design.md (source #1)
+# created:  design-md, architecture-overview, database-layer
+
+aura wiki query "authentication"  # search and synthesise
+# found 3 page(s):
+# ## Authentication
+# JWT tokens with 24-hour expiry...
+
+aura wiki lint                    # health-check the wiki
+# pages:   12
+# sources: 5
+# health:  87%
+# orphans (2):
+#   - old-api-notes
+#   - unused-concept
+
+aura wiki ls                      # browse all pages
+aura wiki show <slug>             # read a specific page
+aura wiki log                     # see the wiki's evolution
+aura wiki index                   # full catalog of all pages
+aura wiki sources                 # list all ingested raw sources
+```
+
 ## Install
 
 ### Build from source (recommended for development)
@@ -148,6 +177,12 @@ go build -o aura ./cmd/aura/
 
 # stop the daemon
 ./aura stop
+
+# build a knowledge wiki
+./aura wiki ingest README.md
+./aura wiki query "architecture"
+./aura wiki ls
+./aura wiki lint
 ```
 
 ## Testing
@@ -184,6 +219,7 @@ go test -v ./internal/router/...     # model router tests
 go test -v ./internal/session/...    # session manager tests
 go test -v ./internal/subprocess/... # binary resolution tests
 go test -v ./internal/autocapture/...# auto-capture tests
+go test -v ./internal/wiki/...       # wiki knowledge base tests
 go test -v ./internal/cli/...        # CLI command tests
 ```
 
@@ -230,6 +266,15 @@ go build -o aura ./cmd/aura/
 ./aura completion bash
 ./aura completion zsh
 ./aura completion fish
+
+# Wiki commands (no daemon needed)
+./aura wiki ingest README.md --dir /tmp/aura-test
+./aura wiki query "architecture" --dir /tmp/aura-test
+./aura wiki ls --dir /tmp/aura-test
+./aura wiki lint --dir /tmp/aura-test
+./aura wiki log --dir /tmp/aura-test
+./aura wiki index --dir /tmp/aura-test
+./aura wiki sources --dir /tmp/aura-test
 ```
 
 ## Connect to your AI tools
@@ -275,6 +320,7 @@ The core memory, MCP server, cost tracking, policy engine, doom loop detection, 
 │  Auto-Capture Engine                    │
 │  Trace Recorder                         │
 │  Model Router ─── .aura/routing.toml    │
+│  Wiki Engine ──── knowledge base        │
 │  Multi-Agent Coordinator                │
 └─────────────────────────────────────────┘
 ```
@@ -332,6 +378,19 @@ aura replay <session_id>         # replay and diff
 aura trust --duration 15         # auto-approve for 15 minutes
 aura trust --path ./src/test     # auto-approve writes to test dir
 
+aura wiki ingest <file>          # ingest a source into the wiki
+aura wiki ingest <text> --title  # ingest inline text
+aura wiki query <terms>          # search wiki and synthesise answer
+aura wiki lint                   # health-check: orphans, stale, missing refs
+aura wiki ls                     # list all wiki pages
+aura wiki ls --category entity   # filter by category
+aura wiki show <slug>            # show full page content
+aura wiki search <query>         # search pages by title/content
+aura wiki log                    # show wiki activity log
+aura wiki index                  # show full wiki catalog
+aura wiki sources                # list all ingested raw sources
+aura wiki rm <slug>              # delete a wiki page
+
 aura setup <tool>                # generate MCP config (claude/cursor/kiro)
 aura version                     # version info
 aura completion <shell>          # shell completions (bash/zsh/fish)
@@ -362,7 +421,8 @@ aura/
 │   ├── session/                   # session lifecycle management
 │   ├── subprocess/                # Rust binary resolution and download
 │   ├── trace/                     # session trace recording and replay
-│   └── verify/                    # claim verification (claimcheck)
+│   ├── verify/                    # claim verification (claimcheck)
+│   └── wiki/                      # LLM-maintained knowledge base
 ├── pkg/types/                     # shared Go types
 ├── Makefile                       # build, test, release targets
 ├── install.sh                     # curl-pipe installer
@@ -378,9 +438,10 @@ aura/
 - [x] v0.4 — Session trace recording and replay
 - [x] v0.5 — Multi-agent shared memory
 - [x] v0.6 — Model router with budget control
-- [ ] v0.7 — Desktop app (Tauri)
-- [ ] v0.8 — Enterprise features (team sync, SSO, audit logs)
-- [ ] v0.9 — Browser extension (Chrome/Firefox)
+- [x] v0.7 — LLM Wiki knowledge base (ingest, query, lint, index)
+- [ ] v0.8 — Desktop app (Tauri)
+- [ ] v0.9 — Enterprise features (team sync, SSO, audit logs)
+- [ ] v0.10 — Browser extension (Chrome/Firefox)
 - [ ] v1.0 — Plugin system and public API
 
 ## Tech stack
@@ -409,6 +470,7 @@ aura/
 | Model routing | ✅ | ❌ | ❌ | ❌ |
 | Session traces | ✅ | ❌ | ❌ | ❌ |
 | Auto-capture | ✅ | ❌ | ❌ | ❌ |
+| Knowledge wiki | ✅ | ❌ | ❌ | ❌ |
 | Single binary (Go) | ✅ | ❌ (Python) | ❌ (Python) | ✅ |
 | Local-first | ✅ | ✅ | ❌ | ✅ |
 

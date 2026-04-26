@@ -135,6 +135,47 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     decided_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 )`},
 	{"idx_routing_session", "CREATE INDEX IF NOT EXISTS idx_routing_session ON routing_decisions(session_id)"},
+
+	// Wiki tables (v0.7 — LLM Wiki knowledge base).
+	{"wiki_sources", `
+CREATE TABLE IF NOT EXISTS wiki_sources (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    title        TEXT    NOT NULL,
+    content      TEXT    NOT NULL,
+    content_hash TEXT    NOT NULL UNIQUE,
+    format       TEXT    NOT NULL DEFAULT 'markdown',
+    origin       TEXT    NOT NULL DEFAULT '',
+    ingested_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+)`},
+	{"idx_wiki_sources_hash", "CREATE INDEX IF NOT EXISTS idx_wiki_sources_hash ON wiki_sources(content_hash)"},
+
+	{"wiki_pages", `
+CREATE TABLE IF NOT EXISTS wiki_pages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug       TEXT    NOT NULL UNIQUE,
+    title      TEXT    NOT NULL,
+    content    TEXT    NOT NULL,
+    category   TEXT    NOT NULL DEFAULT 'entity',
+    tags       TEXT,
+    source_ids TEXT,
+    links      TEXT,
+    created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+)`},
+	{"idx_wiki_pages_slug", "CREATE INDEX IF NOT EXISTS idx_wiki_pages_slug ON wiki_pages(slug)"},
+	{"idx_wiki_pages_category", "CREATE INDEX IF NOT EXISTS idx_wiki_pages_category ON wiki_pages(category)"},
+
+	{"wiki_log", `
+CREATE TABLE IF NOT EXISTS wiki_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    action     TEXT    NOT NULL,
+    summary    TEXT    NOT NULL,
+    page_slugs TEXT,
+    source_id  INTEGER,
+    timestamp  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+)`},
+	{"idx_wiki_log_action", "CREATE INDEX IF NOT EXISTS idx_wiki_log_action ON wiki_log(action)"},
+	{"idx_wiki_log_timestamp", "CREATE INDEX IF NOT EXISTS idx_wiki_log_timestamp ON wiki_log(timestamp)"},
 }
 
 // RunMigrations executes all schema migrations. All statements are idempotent.

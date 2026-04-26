@@ -54,6 +54,8 @@ func init() {
 	rootCmd.AddCommand(cli.NewReplayCmd(&auraDir, &jsonOut))
 	rootCmd.AddCommand(cli.NewTraceCmd(&auraDir, &jsonOut))
 
+	rootCmd.AddCommand(cli.NewWikiCmd(&auraDir, &jsonOut))
+
 	rootCmd.AddCommand(cli.NewHelpCmd(rootCmd))
 	rootCmd.AddCommand(cli.NewVersionCmd(&jsonOut))
 	rootCmd.AddCommand(cli.NewCompletionCmd(rootCmd))

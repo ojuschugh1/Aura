@@ -8,6 +8,7 @@ import (
 	"github.com/ojuschugh1/aura/internal/memory"
 	"github.com/ojuschugh1/aura/internal/policy"
 	"github.com/ojuschugh1/aura/internal/router"
+	"github.com/ojuschugh1/aura/internal/wiki"
 )
 
 // RegisterCoreTools registers the v0.1 memory, verify, and cost tools on the server.
@@ -50,4 +51,17 @@ func RegisterTraceTools(s *Server, tracesDir string) {
 func RegisterRouterTools(s *Server, r *router.Router) {
 	h := &handlers{modelRouter: r}
 	s.Register("route_task", h.routeTask)
+}
+
+// RegisterWikiTools registers the v0.7 wiki tools.
+func RegisterWikiTools(s *Server, engine *wiki.Engine) {
+	h := &handlers{wikiEngine: engine}
+	s.Register("wiki_ingest", h.wikiIngest)
+	s.Register("wiki_query", h.wikiQuery)
+	s.Register("wiki_lint", h.wikiLint)
+	s.Register("wiki_search", h.wikiSearch)
+	s.Register("wiki_read", h.wikiRead)
+	s.Register("wiki_write", h.wikiWrite)
+	s.Register("wiki_index", h.wikiIndex)
+	s.Register("wiki_log", h.wikiLog)
 }

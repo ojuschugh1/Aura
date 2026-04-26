@@ -13,6 +13,7 @@ import (
 	"github.com/ojuschugh1/aura/internal/router"
 	"github.com/ojuschugh1/aura/internal/scan"
 	"github.com/ojuschugh1/aura/internal/trace"
+	"github.com/ojuschugh1/aura/internal/wiki"
 )
 
 // handlers holds service dependencies for MCP tool handlers.
@@ -24,6 +25,7 @@ type handlers struct {
 	policyEngine *policy.Engine
 	tracesDir    string
 	modelRouter  *router.Router
+	wikiEngine   *wiki.Engine
 }
 
 func (h *handlers) memoryWrite(_ context.Context, params map[string]interface{}) (interface{}, error) {
@@ -262,4 +264,147 @@ func (h *handlers) routeTask(_ context.Context, params map[string]interface{}) (
 		return nil, err
 	}
 	return decision, nil
+}
+
+// --- Wiki handlers (v0.7) ---
+
+func (h *handlers) wikiIngest(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	title, _ := stringParam(params, "title")
+	content, ok := stringParam(params, "content")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: content is required")
+	}
+	if title == "" {
+		title = "Untitled Source"
+	}
+	format, _ := stringParam(params, "format")
+	if format == "" {
+		format = "text"
+	}
+	origin, _ := stringParam(params, "origin")
+
+	result, err := h.wikiEngine.Ingest(title, content, format, origin)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (h *handlers) wikiQuery(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	query, ok := stringParam(params, "query")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: query is required")
+	}
+	result, err := h.wikiEngine.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (h *handlers) wikiLint(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	result, err := h.wikiEngine.Lint()
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (h *handlers) wikiSearch(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	query, ok := stringParam(params, "query")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: query is required")
+	}
+	pages, err := h.wikiEngine.Store().SearchPages(query)
+	if err != nil {
+		return nil, err
+	}
+	return pages, nil
+}
+
+func (h *handlers) wikiRead(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	slug, ok := stringParam(params, "slug")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: slug is required")
+	}
+	page, err := h.wikiEngine.Store().GetPage(slug)
+	if err != nil {
+		return nil, fmt.Errorf("WIKI_PAGE_NOT_FOUND: %w", err)
+	}
+	return page, nil
+}
+
+func (h *handlers) wikiWrite(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	slug, ok := stringParam(params, "slug")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: slug is required")
+	}
+	title, _ := stringParam(params, "title")
+	content, ok := stringParam(params, "content")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: content is required")
+	}
+	category, _ := stringParam(params, "category")
+	if category == "" {
+		category = "entity"
+	}
+
+	// Try update first, create if not found.
+	page, err := h.wikiEngine.Store().UpdatePage(slug, content, nil, nil, nil)
+	if err != nil {
+		if title == "" {
+			title = slug
+		}
+		page, err = h.wikiEngine.Store().CreatePage(slug, title, content, category, nil, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return page, nil
+}
+
+func (h *handlers) wikiIndex(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	idx, err := h.wikiEngine.Store().BuildIndex()
+	if err != nil {
+		return nil, err
+	}
+	return idx, nil
+}
+
+func (h *handlers) wikiLog(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	limit := 20
+	if v, ok := params["limit"]; ok {
+		if f, ok := v.(float64); ok {
+			limit = int(f)
+		}
+	}
+	entries, err := h.wikiEngine.Store().RecentLog(limit)
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
