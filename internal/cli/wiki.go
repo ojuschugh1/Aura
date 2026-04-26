@@ -33,6 +33,7 @@ instead of being re-derived on every query.`,
 	cmd.AddCommand(newWikiSourcesCmd(auraDir, jsonOut))
 	cmd.AddCommand(newWikiExportCmd(auraDir, jsonOut))
 	cmd.AddCommand(newWikiGraphCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiFeedCmd(auraDir, jsonOut))
 	return cmd
 }
 
@@ -632,4 +633,118 @@ func newWikiGraphCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newWikiFeedCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	var tool string
+	cmd := &cobra.Command{
+		Use:   "feed [file]",
+		Short: "Feed tool output into the wiki (sqz, ghostdep, claimcheck, etch, or generic JSON)",
+		Long: `Ingest structured output from Aura's companion tools into the wiki.
+Each tool has a dedicated adapter that creates well-structured pages
+with cross-references and cumulative history.
+
+Supported tools: sqz, ghostdep, claimcheck, etch
+For other tools, use --tool <name> to ingest generic JSON.
+
+Input can be a file path or piped via stdin.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			// Read input from file or stdin.
+			var data []byte
+			if len(args) > 0 {
+				data, err = os.ReadFile(args[0])
+				if err != nil {
+					return fmt.Errorf("read file: %w", err)
+				}
+			} else {
+				stat, _ := os.Stdin.Stat()
+				if stat.Mode()&os.ModeCharDevice != 0 {
+					return fmt.Errorf("provide a file path or pipe JSON via stdin\n\nExamples:\n  aura wiki feed scan-results.json --tool ghostdep\n  aura scan --json | aura wiki feed --tool ghostdep\n  aura verify --json | aura wiki feed --tool claimcheck")
+				}
+				data, err = readAllStdin()
+				if err != nil {
+					return fmt.Errorf("read stdin: %w", err)
+				}
+			}
+
+			var result *wiki.ToolIngestResult
+
+			switch strings.ToLower(tool) {
+			case "sqz":
+				var report wiki.SQZReport
+				if err := json.Unmarshal(data, &report); err != nil {
+					return fmt.Errorf("parse sqz report: %w", err)
+				}
+				result, err = engine.IngestSQZ(report)
+
+			case "ghostdep":
+				var report wiki.GhostDepReport
+				if err := json.Unmarshal(data, &report); err != nil {
+					return fmt.Errorf("parse ghostdep report: %w", err)
+				}
+				result, err = engine.IngestGhostDep(report)
+
+			case "claimcheck":
+				var report wiki.ClaimCheckReport
+				if err := json.Unmarshal(data, &report); err != nil {
+					return fmt.Errorf("parse claimcheck report: %w", err)
+				}
+				result, err = engine.IngestClaimCheck(report)
+
+			case "etch":
+				var report wiki.EtchReport
+				if err := json.Unmarshal(data, &report); err != nil {
+					return fmt.Errorf("parse etch report: %w", err)
+				}
+				result, err = engine.IngestEtch(report)
+
+			default:
+				if tool == "" {
+					tool = "unknown"
+				}
+				result, err = engine.IngestToolJSON(tool, data)
+			}
+
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s\n", result.Tool, result.Summary)
+			if len(result.PagesCreated) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "created: %s\n", strings.Join(result.PagesCreated, ", "))
+			}
+			if len(result.PagesUpdated) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "updated: %s\n", strings.Join(result.PagesUpdated, ", "))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&tool, "tool", "", "Tool name: sqz, ghostdep, claimcheck, etch (auto-detected if omitted)")
+	return cmd
+}
+
+func readAllStdin() ([]byte, error) {
+	var buf strings.Builder
+	scanner := make([]byte, 4096)
+	for {
+		n, err := os.Stdin.Read(scanner)
+		if n > 0 {
+			buf.Write(scanner[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+	return []byte(buf.String()), nil
 }
