@@ -91,6 +91,7 @@ func newMemoryGetCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 
 func newMemoryLsCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	var agent string
+	var autoOnly bool
 	cmd := &cobra.Command{
 		Use:   "ls",
 		Short: "List all memory entries",
@@ -101,7 +102,13 @@ func newMemoryLsCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 			}
 			defer close()
 
-			entries, err := store.List(memory.ListFilter{Agent: agent})
+			filter := memory.ListFilter{Agent: agent}
+			// --auto takes precedence over --agent.
+			if autoOnly {
+				filter.Agent = "auto-capture"
+			}
+
+			entries, err := store.List(filter)
 			if err != nil {
 				return err
 			}
@@ -112,15 +119,20 @@ func newMemoryLsCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "no entries")
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-12s %-20s %s\n", "KEY", "SOURCE", "UPDATED", "VALUE")
+			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-18s %-20s %s\n", "KEY", "SOURCE", "UPDATED", "VALUE")
 			for _, e := range entries {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-12s %-20s %s\n",
-					e.Key, e.SourceTool, e.UpdatedAt.Format("2006-01-02 15:04:05"), e.Value)
+				source := e.SourceTool
+				if e.SourceTool == "auto-capture" {
+					source = e.SourceTool + " [auto]"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-18s %-20s %s\n",
+					e.Key, source, e.UpdatedAt.Format("2006-01-02 15:04:05"), e.Value)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&agent, "agent", "", "Filter by source tool name")
+	cmd.Flags().BoolVar(&autoOnly, "auto", false, "Show only auto-captured entries")
 	return cmd
 }
 
