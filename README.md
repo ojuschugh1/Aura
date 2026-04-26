@@ -183,7 +183,7 @@ All commands support `--json` for machine-readable output.
 ## Roadmap
 
 - [x] v0.1 — Memory, MCP server, verification, compression, scanning
-- [ ] v0.2 — Cost tracking improvements, doom loop detection
+- [ ] v0.2 — Auto-capture from sessions, cost tracking, doom loop detection
 - [ ] v0.3 — Action escrow, policy engine, blast radius control
 - [ ] v0.4 — Session trace recording and replay
 - [ ] v0.5 — Multi-agent shared memory
