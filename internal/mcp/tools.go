@@ -64,4 +64,7 @@ func RegisterWikiTools(s *Server, engine *wiki.Engine) {
 	s.Register("wiki_write", h.wikiWrite)
 	s.Register("wiki_index", h.wikiIndex)
 	s.Register("wiki_log", h.wikiLog)
+	s.Register("wiki_export", h.wikiExport)
+	s.Register("wiki_graph", h.wikiGraph)
+	s.Register("wiki_save_query", h.wikiSaveQuery)
 }

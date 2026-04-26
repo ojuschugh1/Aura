@@ -408,3 +408,56 @@ func (h *handlers) wikiLog(_ context.Context, params map[string]interface{}) (in
 	}
 	return entries, nil
 }
+
+func (h *handlers) wikiExport(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	outDir, _ := stringParam(params, "dir")
+	if outDir == "" {
+		outDir = "/tmp/aura-wiki-export"
+	}
+	result, err := h.wikiEngine.ExportMarkdown(outDir)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (h *handlers) wikiGraph(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	stats, err := h.wikiEngine.Graph()
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+func (h *handlers) wikiSaveQuery(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	query, ok := stringParam(params, "query")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: query is required")
+	}
+	// Run the query first, then save.
+	result, err := h.wikiEngine.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	if result.PageCount == 0 {
+		return map[string]string{"message": "no results to save"}, nil
+	}
+	slug, err := h.wikiEngine.SaveQueryResult(result)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"saved_slug": slug,
+		"query":      query,
+		"page_count": result.PageCount,
+	}, nil
+}
