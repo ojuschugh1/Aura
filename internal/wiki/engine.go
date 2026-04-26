@@ -336,6 +336,9 @@ func (e *Engine) Lint() (*types.WikiLintResult, error) {
 	// Detect contradictions across pages.
 	result.Contradictions = findContradictions(pages)
 
+	// Generate actionable suggestions.
+	result.Suggestions = generateSuggestions(pages, result, inbound)
+
 	// Calculate health score.
 	if result.TotalPages > 0 {
 		issues := len(result.Orphans) + len(result.Stale) + len(result.MissingPages) + len(result.Contradictions)

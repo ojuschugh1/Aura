@@ -34,6 +34,8 @@ instead of being re-derived on every query.`,
 	cmd.AddCommand(newWikiExportCmd(auraDir, jsonOut))
 	cmd.AddCommand(newWikiGraphCmd(auraDir, jsonOut))
 	cmd.AddCommand(newWikiFeedCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiSchemaCmd(auraDir))
+	cmd.AddCommand(newWikiFilterCmd(auraDir, jsonOut))
 	return cmd
 }
 
@@ -86,10 +88,34 @@ func newWikiIngestCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 			}
 
 			if len(args) == 0 {
-				return fmt.Errorf("provide a file path, inline text, or use --dir for batch ingest")
+				return fmt.Errorf("provide a file path, URL, inline text, or use --dir for batch ingest")
 			}
 
 			input := strings.Join(args, " ")
+
+			// Check if input is a URL.
+			if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+				result, err := engine.FetchAndIngest(input, title)
+				if err != nil {
+					return err
+				}
+				if *jsonOut {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+				}
+				if result.Duplicate {
+					fmt.Fprintf(cmd.OutOrStdout(), "duplicate: source already ingested (id %d)\n", result.SourceID)
+					return nil
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "ingested: %s (source #%d)\n", result.SourceTitle, result.SourceID)
+				if len(result.PagesCreated) > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "created:  %s\n", strings.Join(result.PagesCreated, ", "))
+				}
+				if len(result.PagesUpdated) > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "updated:  %s\n", strings.Join(result.PagesUpdated, ", "))
+				}
+				return nil
+			}
+
 			origin := ""
 			content := input
 
@@ -261,6 +287,13 @@ func newWikiLintCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 			}
 			if len(result.Orphans) == 0 && len(result.Stale) == 0 && len(result.MissingPages) == 0 && len(result.Contradictions) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no issues found")
+			}
+
+			if len(result.Suggestions) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nsuggestions (%d):\n", len(result.Suggestions))
+				for _, s := range result.Suggestions {
+					fmt.Fprintf(cmd.OutOrStdout(), "  [%s] %s\n", s.Type, s.Message)
+				}
 			}
 			return nil
 		},
@@ -732,6 +765,108 @@ Input can be a file path or piped via stdin.`,
 	}
 	cmd.Flags().StringVar(&tool, "tool", "", "Tool name: sqz, ghostdep, claimcheck, etch (auto-detected if omitted)")
 	return cmd
+}
+
+func newWikiSchemaCmd(auraDir *string) *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "schema",
+		Short: "Generate a schema file (CLAUDE.md / AGENTS.md / .kiro steering) for LLM wiki maintenance",
+		Long: `Generate a schema document that teaches an LLM how to maintain the wiki.
+This is the "third layer" from Karpathy's LLM Wiki pattern — the config
+that turns a generic chatbot into a disciplined wiki maintainer.
+
+Output the schema to stdout, or redirect to a file:
+  aura wiki schema --format claude > CLAUDE.md
+  aura wiki schema --format kiro > .kiro/steering/wiki.md
+  aura wiki schema --format codex > AGENTS.md`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			var schemaFormat wiki.SchemaFormat
+			switch strings.ToLower(format) {
+			case "claude":
+				schemaFormat = wiki.SchemaClaudeCode
+			case "cursor":
+				schemaFormat = wiki.SchemaCursor
+			case "kiro":
+				schemaFormat = wiki.SchemaKiro
+			case "codex":
+				schemaFormat = wiki.SchemaCodex
+			default:
+				schemaFormat = wiki.SchemaGeneric
+			}
+
+			schema := engine.GenerateSchema(schemaFormat)
+			fmt.Fprint(cmd.OutOrStdout(), schema)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "generic", "Target format: claude, cursor, kiro, codex, generic")
+	return cmd
+}
+
+func newWikiFilterCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "filter <expression>",
+		Short: "Query pages by metadata (category, tags, dates, counts)",
+		Long: `Structured queries over page metadata, like Dataview but from the CLI.
+
+Syntax: field=value, field!=value, field>N, field<N, field contains value
+Fields: category, slug, title, tags, source_count, link_count, created, updated
+Join multiple filters with AND.
+
+Examples:
+  aura wiki filter "category=entity"
+  aura wiki filter "tags contains api"
+  aura wiki filter "category=entity AND link_count>3"
+  aura wiki filter "updated>2026-04-01 AND category=source"`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			filters, err := wiki.ParseFilters(args[0])
+			if err != nil {
+				return err
+			}
+
+			pages, err := engine.Store().ListPages("")
+			if err != nil {
+				return err
+			}
+
+			matched, err := wiki.FilterPages(pages, filters)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(matched)
+			}
+
+			if len(matched) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "no pages matching %q\n", args[0])
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%d page(s) matching %q:\n\n", len(matched), args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-12s %-20s %s\n", "SLUG", "CATEGORY", "UPDATED", "TITLE")
+			for _, p := range matched {
+				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-12s %-20s %s\n",
+					truncateStr(p.Slug, 30), p.Category,
+					p.UpdatedAt.Format("2006-01-02 15:04"), p.Title)
+			}
+			return nil
+		},
+	}
 }
 
 func readAllStdin() ([]byte, error) {
