@@ -4,6 +4,8 @@
 
 Aura is a local-first daemon that gives every AI tool you use — Claude Code, Cursor, Kiro, Gemini CLI — persistent memory, claim verification, token compression, and dependency scanning. One binary. Zero cloud. Works across tools.
 
+**Current status: v0.6-dev** — 18 packages, ~14,600 lines of Go, 403 passing tests.
+
 ---
 
 ## The problem
@@ -37,7 +39,7 @@ aura verify
 **Token compression** — Pipe context through sqz before it hits the model. Save tokens, save money.
 
 ```
-cat large-context.txt | aura compact
+aura compact
 # original:   2,400 tokens
 # compressed: 1,800 tokens
 # reduction:  25%
@@ -62,42 +64,172 @@ aura cost --daily
 # saved:  $0.08 (12,000 tokens compressed)
 ```
 
+**Action escrow** — Intercept destructive agent actions and require your approval before execution.
+
+```
+aura trust --duration 15         # auto-approve for 15 minutes
+aura trust --path ./src/test     # auto-approve writes to test dir only
+```
+
+**Doom loop detection** — Detects when an AI agent repeats the same failed action 3+ times and alerts you.
+
+**Model routing** — Route tasks to the right model based on complexity. Use cheap models for simple tasks, capable models for hard ones. Budget limits stop runaway spending.
+
+**Session traces** — Record full agent sessions as replayable traces. Search, export, and replay them.
+
+```
+aura trace last                  # last session summary
+aura trace search "deploy"       # search across all traces
+aura replay <session_id>         # replay and diff
+```
+
+**Auto-capture** — Automatically extracts decisions from AI sessions ("we decided to use PostgreSQL", "going with microservices") and stores them in memory without manual effort.
+
 ## Install
 
+### Build from source (recommended for development)
+
 ```bash
-# macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/ojuschugh1/Aura/main/install.sh | sh
-
-# or build from source
-go install github.com/ojuschugh1/Aura/cmd/aura@latest
-
-# or clone and build
 git clone https://github.com/ojuschugh1/Aura.git
 cd Aura
 go build -o aura ./cmd/aura/
 ```
 
+### Using go install
+
+```bash
+go install github.com/ojuschugh1/Aura/cmd/aura@latest
+```
+
+### Using the install script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ojuschugh1/Aura/main/install.sh | sh
+```
+
+### Using the Makefile
+
+```bash
+make build        # builds to bin/aura
+make test         # runs all tests
+make release      # cross-compile for all platforms
+```
+
 ## Quick start
 
 ```bash
+# build the binary
+go build -o aura ./cmd/aura/
+
 # start the daemon
-aura init
+./aura init
 
 # store some context
-aura memory add "architecture" "event sourcing, not CRUD"
-aura memory add "db" "PostgreSQL with pgvector"
+./aura memory add "architecture" "event sourcing, not CRUD"
+./aura memory add "db" "PostgreSQL with pgvector"
 
 # check it persists
-aura memory ls
+./aura memory ls
+
+# JSON output for scripting
+./aura memory ls --json
 
 # verify what your AI actually did
-aura verify
+./aura verify
 
 # scan for bad dependencies
-aura scan
+./aura scan
 
 # see your costs
-aura cost
+./aura cost
+
+# check daemon status
+./aura status
+
+# stop the daemon
+./aura stop
+```
+
+## Testing
+
+### Run all tests
+
+```bash
+go test ./...
+```
+
+### Run tests with verbose output
+
+```bash
+go test -v ./...
+```
+
+### Run tests for a specific package
+
+```bash
+go test -v ./internal/memory/...     # memory store tests
+go test -v ./internal/db/...         # database tests
+go test -v ./internal/daemon/...     # daemon lifecycle tests
+go test -v ./internal/mcp/...        # MCP server tests
+go test -v ./internal/verify/...     # claim verification tests
+go test -v ./internal/compress/...   # compression tests
+go test -v ./internal/cost/...       # cost tracking tests
+go test -v ./internal/doomloop/...   # doom loop detection tests
+go test -v ./internal/escrow/...     # action escrow tests
+go test -v ./internal/policy/...     # policy engine tests
+go test -v ./internal/scan/...       # dependency scanning tests
+go test -v ./internal/trace/...      # trace recording tests
+go test -v ./internal/multiagent/... # multi-agent memory tests
+go test -v ./internal/router/...     # model router tests
+go test -v ./internal/session/...    # session manager tests
+go test -v ./internal/subprocess/... # binary resolution tests
+go test -v ./internal/autocapture/...# auto-capture tests
+go test -v ./internal/cli/...        # CLI command tests
+```
+
+### Run tests with race detection
+
+```bash
+go test -race ./...
+```
+
+### Testing in Kiro
+
+You can run tests directly from Kiro's terminal:
+
+1. Open the terminal in Kiro (`` Ctrl+` `` or `` Cmd+` ``)
+2. Run `go test ./...` to execute the full test suite
+3. Run `go test -v ./internal/memory/...` to test a specific package
+4. Run `go build -o aura ./cmd/aura/` to build the binary
+5. Run `./aura --help` to see all available commands
+6. Run `./aura init` to start the daemon and test it interactively
+
+You can also test individual CLI commands without starting the daemon — the memory commands work standalone since they open the SQLite database directly:
+
+```bash
+# Build and test memory commands (no daemon needed)
+go build -o aura ./cmd/aura/
+./aura memory add "test.key" "test-value" --dir /tmp/aura-test
+./aura memory get "test.key" --dir /tmp/aura-test
+./aura memory ls --dir /tmp/aura-test
+./aura memory ls --json --dir /tmp/aura-test
+./aura memory rm "test.key" --dir /tmp/aura-test
+
+# Test version and help
+./aura version
+./aura version --json
+./aura --help
+./aura memory --help
+
+# Generate MCP config snippets
+./aura setup claude
+./aura setup cursor
+./aura setup kiro
+
+# Shell completions
+./aura completion bash
+./aura completion zsh
+./aura completion fish
 ```
 
 ## Connect to your AI tools
@@ -109,17 +241,17 @@ aura setup cursor    # Cursor
 aura setup kiro      # Kiro
 ```
 
-This prints the JSON snippet you need to add to your tool's MCP config. Two lines, and your AI tool can read/write Aura memory.
+This prints the JSON snippet you need to add to your tool's MCP config file.
 
 ## How it works
 
 Aura runs as a local Go daemon with an embedded MCP server and SQLite database. It integrates with three Rust tools as optional subprocesses:
 
-- **sqz** — token compression (auto-downloaded if missing)
-- **claimcheck** — claim verification (auto-downloaded if missing)
-- **ghostdep** — dependency scanning (auto-downloaded if missing)
+- **sqz** — token compression (auto-downloaded on first use)
+- **claimcheck** — claim verification (auto-downloaded on first use)
+- **ghostdep** — dependency scanning (auto-downloaded on first use)
 
-The core memory and MCP server work without any of these — they're pure Go with zero external dependencies.
+The core memory, MCP server, cost tracking, policy engine, doom loop detection, session traces, and model router work without any of these — they're pure Go with zero external dependencies.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -132,35 +264,59 @@ The core memory and MCP server work without any of these — they're pure Go wit
 │                                         │
 │  Memory Store ─── SQLite (WAL mode)     │
 │  MCP Server ───── localhost:7437        │
+│  Session Manager                        │
 │  Claim Verifier ─ claimcheck (Rust)     │
 │  Compressor ───── sqz (Rust)            │
 │  Dep Scanner ──── ghostdep (Rust)       │
 │  Cost Tracker                           │
-│  Policy Engine                          │
+│  Policy Engine ── .aura/policy.toml     │
+│  Action Escrow                          │
 │  Doom Loop Detector                     │
+│  Auto-Capture Engine                    │
+│  Trace Recorder                         │
+│  Model Router ─── .aura/routing.toml    │
+│  Multi-Agent Coordinator                │
 └─────────────────────────────────────────┘
 ```
 
 All data stays on your machine in `~/.aura/`. Nothing leaves your system unless you explicitly configure cloud sync.
 
+### Configuration files
+
+On `aura init`, three config files are generated in your `.aura/` directory:
+
+| File | Purpose |
+|------|---------|
+| `config.toml` | Daemon port, log level, auth secret, memory limits, compression settings, model pricing, trace TTL |
+| `policy.toml` | Action approval rules — which actions are auto-approved, require approval, or denied |
+| `routing.toml` | Model routing configuration — which models handle which complexity levels |
+
+The policy engine supports hot-reload — edit `policy.toml` while the daemon is running and changes take effect within 5 seconds.
+
 ## All commands
 
 ```
-aura init                        # start daemon
+aura init                        # start daemon, generate config files
+aura init --install-deps         # start daemon and download all Rust binaries
+aura init --skip-deps            # start daemon, skip dependency check
 aura status                      # show daemon state
 aura stop                        # stop daemon
 
 aura memory add <key> <value>    # store context
 aura memory get <key>            # retrieve context
 aura memory ls                   # list all entries
+aura memory ls --agent <tool>    # filter by source tool
+aura memory ls --auto            # show only auto-captured entries
 aura memory rm <key>             # delete entry
 aura memory export               # export to JSON
 aura memory import               # import from JSON
 
-aura verify                      # verify agent claims
-aura compact                     # compress context (pipe from stdin)
-aura scan                        # scan for bad dependencies
+aura verify                      # verify agent claims (current session)
+aura verify --session <id>       # verify specific session
+aura compact                     # compress context
+aura scan                        # scan for phantom dependencies
 aura scan --sarif                # SARIF output for CI/CD
+aura scan --fix                  # suggest auto-fixes
 
 aura cost                        # current session cost
 aura cost --daily                # daily breakdown
@@ -169,25 +325,59 @@ aura cost --weekly               # weekly breakdown
 aura trace last                  # last session trace
 aura trace show <id>             # full trace
 aura trace search <query>        # search traces
+aura trace export <id>           # export trace (JSON/HTML)
+aura trace pin <id>              # pin trace (prevent pruning)
+aura replay <session_id>         # replay and diff
 
 aura trust --duration 15         # auto-approve for 15 minutes
 aura trust --path ./src/test     # auto-approve writes to test dir
 
-aura setup <tool>                # generate MCP config
+aura setup <tool>                # generate MCP config (claude/cursor/kiro)
 aura version                     # version info
 aura completion <shell>          # shell completions (bash/zsh/fish)
 ```
 
-All commands support `--json` for machine-readable output.
+All commands support `--json` for machine-readable output and `--dir` to override the data directory.
+
+## Project structure
+
+```
+aura/
+├── cmd/aura/main.go              # CLI entry point (cobra)
+├── internal/
+│   ├── autocapture/               # decision extraction from transcripts
+│   ├── cli/                       # all CLI command implementations
+│   ├── compress/                  # token compression (sqz subprocess)
+│   ├── cost/                      # cost tracking and reporting
+│   ├── daemon/                    # daemon lifecycle, config, logging
+│   ├── db/                        # SQLite connection, migrations
+│   ├── doomloop/                  # stuck-agent detection
+│   ├── escrow/                    # action escrow and trust windows
+│   ├── mcp/                       # MCP server (HTTP/JSON-RPC)
+│   ├── memory/                    # persistent key-value memory store
+│   ├── multiagent/                # shared memory coordination
+│   ├── policy/                    # configurable action approval rules
+│   ├── router/                    # model routing and budget control
+│   ├── scan/                      # dependency scanning (ghostdep)
+│   ├── session/                   # session lifecycle management
+│   ├── subprocess/                # Rust binary resolution and download
+│   ├── trace/                     # session trace recording and replay
+│   └── verify/                    # claim verification (claimcheck)
+├── pkg/types/                     # shared Go types
+├── Makefile                       # build, test, release targets
+├── install.sh                     # curl-pipe installer
+├── go.mod
+└── go.sum
+```
 
 ## Roadmap
 
-- [x] v0.1 — Memory, MCP server, verification, compression, scanning
-- [ ] v0.2 — Auto-capture from sessions, cost tracking, doom loop detection
-- [ ] v0.3 — Action escrow, policy engine, blast radius control
-- [ ] v0.4 — Session trace recording and replay
-- [ ] v0.5 — Multi-agent shared memory
-- [ ] v0.6 — Model router with budget control
+- [x] v0.1 — Daemon, memory, MCP server, claim verification, data integrity, CLI, install
+- [x] v0.2 — Auto-capture from sessions, token compression, cost tracking, doom loop detection
+- [x] v0.3 — Action escrow, policy engine, dependency scanning
+- [x] v0.4 — Session trace recording and replay
+- [x] v0.5 — Multi-agent shared memory
+- [x] v0.6 — Model router with budget control
 - [ ] v0.7 — Desktop app (Tauri)
 - [ ] v0.8 — Enterprise features (team sync, SSO, audit logs)
 - [ ] v0.9 — Browser extension (Chrome/Firefox)
@@ -195,13 +385,15 @@ All commands support `--json` for machine-readable output.
 
 ## Tech stack
 
-- **Go** — single static binary, zero runtime dependencies
-- **SQLite** (via modernc.org/sqlite) — embedded, crash-safe, WAL mode
-- **MCP** — Model Context Protocol for universal AI tool integration
-- **cobra** — CLI framework
-- **sqz** (Rust) — token compression (optional, auto-downloaded)
-- **claimcheck** (Rust) — claim verification (optional, auto-downloaded)
-- **ghostdep** (Rust) — dependency scanning (optional, auto-downloaded)
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| Core daemon | Go 1.22+ | Single static binary, excellent concurrency |
+| Storage | SQLite via modernc.org/sqlite | Embedded, crash-safe WAL mode, pure Go (no CGO) |
+| CLI | cobra + viper | Standard Go CLI tooling |
+| Configuration | TOML | Human-readable, well-supported |
+| Compression | Rust (sqz binary) | Existing tool, called as subprocess |
+| Verification | Rust (claimcheck binary) | Existing tool, called as subprocess |
+| Scanning | Rust (ghostdep binary) | Tree-sitter AST analysis |
 
 ## Why not just use MemPalace / Mem0 / Engram?
 
@@ -213,6 +405,10 @@ All commands support `--json` for machine-readable output.
 | Dependency scanning | ✅ | ❌ | ❌ | ❌ |
 | Cost tracking | ✅ | ❌ | ❌ | ❌ |
 | Action escrow | ✅ | ❌ | ❌ | ❌ |
+| Doom loop detection | ✅ | ❌ | ❌ | ❌ |
+| Model routing | ✅ | ❌ | ❌ | ❌ |
+| Session traces | ✅ | ❌ | ❌ | ❌ |
+| Auto-capture | ✅ | ❌ | ❌ | ❌ |
 | Single binary (Go) | ✅ | ❌ (Python) | ❌ (Python) | ✅ |
 | Local-first | ✅ | ✅ | ❌ | ✅ |
 
