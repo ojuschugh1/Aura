@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Wiki Context Check",
+  "description": "Before starting a task, check the wiki for relevant context so the agent doesn't re-derive knowledge that already exists.",
+  "version": "1",
+  "when": {
+    "type": "preTaskExecution"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Before starting this task, check if the Aura wiki has relevant context. Run: aura wiki index --dir .aura --json 2>/dev/null to see available pages. If any pages are relevant to the current task, read them with: aura wiki show <slug> --dir .aura. Use this existing knowledge instead of re-deriving it. If the wiki is empty or has no relevant pages, proceed normally."
+  }
+}

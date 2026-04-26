@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "name": "Wiki Metabolism",
+  "description": "After the agent stops, run a wiki metabolism pass to decay stale knowledge, detect consolidation candidates, and check contradiction pressure.",
+  "version": "1",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "go run ./cmd/aura wiki metabolize --dir .aura 2>/dev/null || true",
+    "timeout": 15
+  }
+}

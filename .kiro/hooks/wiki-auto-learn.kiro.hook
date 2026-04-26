@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Wiki Auto-Learn",
+  "description": "After each task completes, remind the agent to ingest any decisions or important findings into the Aura wiki so knowledge compounds across sessions.",
+  "version": "1",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "The task just completed. Check if any important decisions, architecture choices, or findings were made during this task. If so, ingest them into the Aura wiki using: aura wiki ingest --dir .aura --title \"<topic>\" \"<decision and reasoning>\". Only ingest genuinely important decisions, not routine code changes. Skip if nothing noteworthy happened."
+  }
+}
