@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     source_tool   TEXT    NOT NULL DEFAULT 'cli',
     session_id    TEXT    NOT NULL,
     tags          TEXT,
+    confidence    REAL    NOT NULL DEFAULT 1.0,
     created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     content_hash  TEXT    NOT NULL
@@ -176,6 +177,23 @@ CREATE TABLE IF NOT EXISTS wiki_log (
 )`},
 	{"idx_wiki_log_action", "CREATE INDEX IF NOT EXISTS idx_wiki_log_action ON wiki_log(action)"},
 	{"idx_wiki_log_timestamp", "CREATE INDEX IF NOT EXISTS idx_wiki_log_timestamp ON wiki_log(timestamp)"},
+
+	// Knowledge graph edges (Graphify).
+	{"memory_edges", `
+CREATE TABLE IF NOT EXISTS memory_edges (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_key    TEXT    NOT NULL,
+    to_key      TEXT    NOT NULL,
+    relation    TEXT    NOT NULL DEFAULT 'related-to',
+    confidence  REAL    NOT NULL DEFAULT 1.0,
+    source_tool TEXT    NOT NULL DEFAULT 'cli',
+    session_id  TEXT    NOT NULL DEFAULT '',
+    created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(from_key, to_key, relation)
+)`},
+	{"idx_edges_from", "CREATE INDEX IF NOT EXISTS idx_edges_from ON memory_edges(from_key)"},
+	{"idx_edges_to", "CREATE INDEX IF NOT EXISTS idx_edges_to ON memory_edges(to_key)"},
+	{"idx_edges_relation", "CREATE INDEX IF NOT EXISTS idx_edges_relation ON memory_edges(relation)"},
 }
 
 // RunMigrations executes all schema migrations. All statements are idempotent.

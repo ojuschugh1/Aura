@@ -94,10 +94,8 @@ func (e *CaptureEngine) captureFromText(sessionID string, text string) (int, err
 		}
 		seen[m.Key] = true
 
-		// Upsert into the memory store. The store's Add method handles
-		// insert-or-update semantics, so existing entries with the same key
-		// are updated rather than duplicated (Req 4b.5).
-		_, err := e.store.Add(m.Key, m.Value, "auto-capture", sessionID)
+		// Upsert into the memory store with confidence from the match.
+		_, err := e.store.AddWithMeta(m.Key, m.Value, "auto-capture", sessionID, m.Confidence, nil)
 		if err != nil {
 			return captured, fmt.Errorf("store decision %q: %w", m.Key, err)
 		}

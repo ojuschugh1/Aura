@@ -649,3 +649,92 @@ func (h *handlers) wikiIngestURL(_ context.Context, params map[string]interface{
 	}
 	return result, nil
 }
+
+// --- Graph and search handlers ---
+
+func (h *handlers) memoryLink(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	fromKey, ok := stringParam(params, "from_key")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: from_key is required")
+	}
+	toKey, ok := stringParam(params, "to_key")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: to_key is required")
+	}
+	relation, _ := stringParam(params, "relation")
+	if relation == "" {
+		relation = "related-to"
+	}
+	sourceTool, _ := stringParam(params, "source_tool")
+	if sourceTool == "" {
+		sourceTool = "mcp"
+	}
+	sessionID, _ := stringParam(params, "session_id")
+
+	confidence := 1.0
+	if v, ok := params["confidence"]; ok {
+		if f, ok := v.(float64); ok {
+			confidence = f
+		}
+	}
+
+	edge, err := h.store.AddEdge(fromKey, toKey, relation, sourceTool, sessionID, confidence)
+	if err != nil {
+		return nil, err
+	}
+	return edge, nil
+}
+
+func (h *handlers) memoryRelated(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	key, ok := stringParam(params, "key")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: key is required")
+	}
+
+	edges, err := h.store.GetEdges(key)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := h.store.GetRelated(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"key":     key,
+		"edges":   edges,
+		"entries": entries,
+	}, nil
+}
+
+func (h *handlers) memorySearch(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	query, ok := stringParam(params, "query")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: query is required")
+	}
+
+	entries, err := h.store.Search(query)
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func (h *handlers) memoryGraph(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	entries, err := h.store.List(memory.ListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	edges, err := h.store.AllEdges()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"entries": entries,
+		"edges":   edges,
+		"stats": map[string]int{
+			"entry_count": len(entries),
+			"edge_count":  len(edges),
+		},
+	}, nil
+}

@@ -56,6 +56,8 @@ func init() {
 
 	rootCmd.AddCommand(cli.NewWikiCmd(&auraDir, &jsonOut))
 
+	rootCmd.AddCommand(cli.NewProjectCmd(&auraDir, &jsonOut))
+
 	rootCmd.AddCommand(cli.NewHelpCmd(rootCmd))
 	rootCmd.AddCommand(cli.NewVersionCmd(&jsonOut))
 	rootCmd.AddCommand(cli.NewCompletionCmd(rootCmd))

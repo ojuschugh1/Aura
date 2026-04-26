@@ -22,6 +22,11 @@ func NewMemoryCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	cmd.AddCommand(newMemoryRmCmd(auraDir))
 	cmd.AddCommand(newMemoryExportCmd(auraDir))
 	cmd.AddCommand(newMemoryImportCmd(auraDir))
+	cmd.AddCommand(newMemoryLinkCmd(auraDir, jsonOut))
+	cmd.AddCommand(newMemoryUnlinkCmd(auraDir))
+	cmd.AddCommand(newMemoryRelatedCmd(auraDir, jsonOut))
+	cmd.AddCommand(newMemorySearchCmd(auraDir, jsonOut))
+	cmd.AddCommand(newMemoryTagCmd(auraDir))
 	return cmd
 }
 
@@ -208,4 +213,174 @@ func newMemoryImportCmd(auraDir *string) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", "", "Input file path (default: .aura/memory_export.json)")
 	return cmd
+}
+
+func newMemoryLinkCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	var relation string
+	var confidence float64
+	cmd := &cobra.Command{
+		Use:   "link <from> <to>",
+		Short: "Create a relationship between two memory entries",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, close, err := openStore(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			edge, err := store.AddEdge(args[0], args[1], relation, "cli", "", confidence)
+			if err != nil {
+				return err
+			}
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(edge)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "linked: %s -[%s]-> %s (confidence: %.2f)\n",
+				edge.FromKey, edge.Relation, edge.ToKey, edge.Confidence)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&relation, "relation", "related-to", "Relationship type (depends-on, includes, related-to, contradicts, supersedes)")
+	cmd.Flags().Float64Var(&confidence, "confidence", 1.0, "Confidence score (0.0-1.0)")
+	return cmd
+}
+
+func newMemoryUnlinkCmd(auraDir *string) *cobra.Command {
+	var relation string
+	cmd := &cobra.Command{
+		Use:   "unlink <from> <to>",
+		Short: "Remove a relationship between two memory entries",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, close, err := openStore(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			if err := store.DeleteEdge(args[0], args[1], relation); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "unlinked: %s -[%s]-> %s\n", args[0], relation, args[1])
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&relation, "relation", "related-to", "Relationship type to remove")
+	return cmd
+}
+
+func newMemoryRelatedCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "related <key>",
+		Short: "Show all entries connected to a key with their relationships",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, close, err := openStore(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			edges, err := store.GetEdges(args[0])
+			if err != nil {
+				return err
+			}
+			entries, err := store.GetRelated(args[0])
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]interface{}{
+					"edges":   edges,
+					"entries": entries,
+				})
+			}
+
+			if len(edges) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no relationships found")
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Relationships for %q:\n", args[0])
+			for _, e := range edges {
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s -[%s]-> %s (confidence: %.2f)\n",
+					e.FromKey, e.Relation, e.ToKey, e.Confidence)
+			}
+
+			if len(entries) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nConnected entries:\n")
+				for _, e := range entries {
+					val := e.Value
+					if len(val) > 60 {
+						val = val[:60] + "…"
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "  %-30s %s\n", e.Key, val)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func newMemorySearchCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "search <query>",
+		Short: "Full-text search across all memory entries",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, close, err := openStore(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			entries, err := store.Search(args[0])
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(entries)
+			}
+
+			if len(entries) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no matches")
+				return nil
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-18s %s\n", "KEY", "SOURCE", "VALUE")
+			for _, e := range entries {
+				val := e.Value
+				if len(val) > 50 {
+					val = val[:50] + "…"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-18s %s\n", e.Key, e.SourceTool, val)
+			}
+			return nil
+		},
+	}
+}
+
+func newMemoryTagCmd(auraDir *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "tag <key> <tag1> [tag2...]",
+		Short: "Add tags to a memory entry",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, close, err := openStore(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			entry, err := store.AddTags(args[0], args[1:])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "tagged %s: %v\n", entry.Key, entry.Tags)
+			return nil
+		},
+	}
 }

@@ -15,6 +15,7 @@ var expectedTables = []string{
 	"dedup_cache",
 	"agent_activity_log",
 	"routing_decisions",
+	"memory_edges",
 }
 
 func TestRunMigrations_CreatesAllTables(t *testing.T) {
