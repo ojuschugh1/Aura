@@ -14,6 +14,7 @@ import (
 	"github.com/ojuschugh1/aura/internal/db"
 	"github.com/ojuschugh1/aura/internal/memory"
 	"github.com/ojuschugh1/aura/internal/session"
+	"github.com/ojuschugh1/aura/internal/wiki"
 )
 
 // EnvDaemon is set to "1" when the process is running as the background daemon.
@@ -148,15 +149,27 @@ func RunDaemon(dir string, port int, sessionID string) error {
 	captureEngine := autocapture.NewCaptureEngine(store, autocapture.DefaultCaptureConfig())
 	tracesDir := filepath.Join(dir, "traces")
 
+	// Set up the wiki auto-learner — this is what makes Aura self-improving.
+	// No IDE hooks needed. The daemon learns from everything automatically.
+	wikiStore := wiki.NewStore(database)
+	wikiEngine := wiki.NewEngine(wikiStore)
+	autoLearner := wiki.NewAutoLearner(wikiEngine, store, captureEngine, database, dir)
+	autoLearner.Start(wiki.DefaultAutoLearnConfig())
+	defer autoLearner.Stop()
+
 	sessMgr.SetOnEndHook(func(sessionID string) {
 		go func() {
+			// Auto-capture decisions into memory (existing behavior).
 			transcriptPath := filepath.Join(tracesDir, sessionID+".jsonl")
 			n, err := captureEngine.ProcessTranscript(sessionID, transcriptPath)
 			if err != nil {
 				slog.Warn("auto-capture failed", "session_id", sessionID, "err", err)
-				return
+			} else {
+				slog.Info("auto-capture completed", "session_id", sessionID, "captured", n)
 			}
-			slog.Info("auto-capture completed", "session_id", sessionID, "captured", n)
+
+			// Auto-learn into wiki (new behavior).
+			autoLearner.OnSessionEnd(sessionID)
 		}()
 	})
 
