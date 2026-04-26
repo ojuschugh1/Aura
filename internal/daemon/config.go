@@ -117,12 +117,12 @@ reviewer = "gpt-4o"
 // generateLocalSecret creates a random 32-byte hex secret for the daemon.
 func generateLocalSecret() string {
 	b := make([]byte, 32)
-	if _, err := os.ReadFile("/dev/urandom"); err == nil {
-		f, _ := os.Open("/dev/urandom")
-		if f != nil {
-			defer f.Close()
-			_, _ = f.Read(b)
-		}
+	f, err := os.Open("/dev/urandom")
+	if err != nil {
+		// Fallback: use PID + timestamp as a weak secret.
+		return fmt.Sprintf("%x%x", os.Getpid(), os.Getpid()*1000003)
 	}
+	defer f.Close()
+	_, _ = f.Read(b)
 	return fmt.Sprintf("%x", b)
 }

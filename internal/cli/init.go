@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/ojuschugh1/aura/internal/daemon"
 	"github.com/ojuschugh1/aura/internal/subprocess"
@@ -51,6 +52,8 @@ func NewInitCmd(auraDir *string) *cobra.Command {
 			if err := daemon.Start(dir, port); err != nil {
 				return fmt.Errorf("start daemon: %w", err)
 			}
+			// Give the daemon a moment to write its lock file.
+			time.Sleep(500 * time.Millisecond)
 			fmt.Fprintf(cmd.OutOrStdout(), "aura daemon started (port %d, dir %s)\n", port, filepath.Clean(dir))
 			return nil
 		},

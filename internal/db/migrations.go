@@ -186,6 +186,9 @@ CREATE TABLE IF NOT EXISTS wiki_log (
 	{"wiki_pages_query_count", "ALTER TABLE wiki_pages ADD COLUMN query_count INTEGER DEFAULT 0"},
 	{"wiki_pages_last_queried", "ALTER TABLE wiki_pages ADD COLUMN last_queried TEXT"},
 
+	// Memory confidence column (added in v0.9 — may not exist in older DBs).
+	{"memory_entries_confidence", "ALTER TABLE memory_entries ADD COLUMN confidence REAL DEFAULT 1.0"},
+
 	// Contradiction pressure tracking.
 	{"wiki_pressure", `
 CREATE TABLE IF NOT EXISTS wiki_pressure (

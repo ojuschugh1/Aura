@@ -93,13 +93,16 @@ func Start(dir string, port int) error {
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	// Setsid creates a new session so the daemon is fully detached from the
+	// terminal and won't receive SIGHUP when the parent CLI process exits.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		return fmt.Errorf("fork daemon: %w", err)
 	}
 
-	// Detach: release the child so it outlives the CLI process.
+	// Release the Go runtime's reference — the OS keeps the process alive.
 	if err := cmd.Process.Release(); err != nil {
 		return fmt.Errorf("release daemon process: %w", err)
 	}
