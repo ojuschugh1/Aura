@@ -31,6 +31,8 @@ instead of being re-derived on every query.`,
 	cmd.AddCommand(newWikiIndexCmd(auraDir, jsonOut))
 	cmd.AddCommand(newWikiRmCmd(auraDir))
 	cmd.AddCommand(newWikiSourcesCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiExportCmd(auraDir, jsonOut))
+	cmd.AddCommand(newWikiGraphCmd(auraDir, jsonOut))
 	return cmd
 }
 
@@ -50,17 +52,41 @@ func openWikiEngine(auraDir string) (*wiki.Engine, func(), error) {
 }
 
 func newWikiIngestCmd(auraDir *string, jsonOut *bool) *cobra.Command {
-	var title, format string
+	var title, format, dir string
 	cmd := &cobra.Command{
-		Use:   "ingest <file-or-text>",
-		Short: "Ingest a source into the wiki (file path or inline text)",
-		Args:  cobra.MinimumNArgs(1),
+		Use:   "ingest [file-or-text]",
+		Short: "Ingest a source into the wiki (file path, inline text, or --dir for batch)",
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			engine, close, err := openWikiEngine(*auraDir)
 			if err != nil {
 				return err
 			}
 			defer close()
+
+			// Batch ingest mode.
+			if dir != "" {
+				result, err := engine.BatchIngest(dir)
+				if err != nil {
+					return err
+				}
+				if *jsonOut {
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "batch ingest from %s:\n", dir)
+				fmt.Fprintf(cmd.OutOrStdout(), "  total:      %d files\n", result.Total)
+				fmt.Fprintf(cmd.OutOrStdout(), "  ingested:   %d\n", result.Ingested)
+				fmt.Fprintf(cmd.OutOrStdout(), "  duplicates: %d\n", result.Duplicates)
+				fmt.Fprintf(cmd.OutOrStdout(), "  errors:     %d\n", result.Errors)
+				for _, e := range result.ErrorDetails {
+					fmt.Fprintf(cmd.OutOrStdout(), "  error: %s\n", e)
+				}
+				return nil
+			}
+
+			if len(args) == 0 {
+				return fmt.Errorf("provide a file path, inline text, or use --dir for batch ingest")
+			}
 
 			input := strings.Join(args, " ")
 			origin := ""
@@ -129,11 +155,13 @@ func newWikiIngestCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "Source title (default: filename or first 50 chars)")
 	cmd.Flags().StringVar(&format, "format", "", "Source format: markdown, text, jsonl (auto-detected)")
+	cmd.Flags().StringVar(&dir, "dir", "", "Batch ingest all supported files from a directory")
 	return cmd
 }
 
 func newWikiQueryCmd(auraDir *string, jsonOut *bool) *cobra.Command {
-	return &cobra.Command{
+	var save bool
+	cmd := &cobra.Command{
 		Use:   "query <search-terms>",
 		Short: "Search the wiki and get a synthesised answer",
 		Args:  cobra.MinimumNArgs(1),
@@ -150,6 +178,15 @@ func newWikiQueryCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 				return err
 			}
 
+			// File the answer back as a wiki page if --save is set.
+			if save && result.PageCount > 0 {
+				slug, err := engine.SaveQueryResult(result)
+				if err != nil {
+					return fmt.Errorf("save query result: %w", err)
+				}
+				result.SavedSlug = slug
+			}
+
 			if *jsonOut {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 			}
@@ -161,9 +198,15 @@ func newWikiQueryCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 
 			fmt.Fprintf(cmd.OutOrStdout(), "found %d page(s):\n\n", result.PageCount)
 			fmt.Fprintln(cmd.OutOrStdout(), result.Answer)
+
+			if result.SavedSlug != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nsaved as wiki page: %s\n", result.SavedSlug)
+			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&save, "save", false, "File the answer back into the wiki as a synthesis page")
+	return cmd
 }
 
 func newWikiLintCmd(auraDir *string, jsonOut *bool) *cobra.Command {
@@ -209,7 +252,13 @@ func newWikiLintCmd(auraDir *string, jsonOut *bool) *cobra.Command {
 					fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", m)
 				}
 			}
-			if len(result.Orphans) == 0 && len(result.Stale) == 0 && len(result.MissingPages) == 0 {
+			if len(result.Contradictions) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "contradictions (%d):\n", len(result.Contradictions))
+				for _, c := range result.Contradictions {
+					fmt.Fprintf(cmd.OutOrStdout(), "  - %s vs %s: %s\n", c.PageA, c.PageB, c.Snippet)
+				}
+			}
+			if len(result.Orphans) == 0 && len(result.Stale) == 0 && len(result.MissingPages) == 0 && len(result.Contradictions) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no issues found")
 			}
 			return nil
@@ -475,4 +524,112 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-1] + "…"
+}
+
+func newWikiExportCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	var outDir string
+	cmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export the wiki as markdown files with YAML frontmatter (Obsidian-compatible)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			if outDir == "" {
+				outDir = filepath.Join(*auraDir, "wiki-export")
+			}
+
+			result, err := engine.ExportMarkdown(outDir)
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "exported %d pages to %s\n", result.PagesCount, result.Dir)
+			fmt.Fprintf(cmd.OutOrStdout(), "  index: %s\n", result.IndexFile)
+			fmt.Fprintf(cmd.OutOrStdout(), "  log:   %s\n", result.LogFile)
+			fmt.Fprintln(cmd.OutOrStdout(), "\nopen in Obsidian to browse with graph view and Dataview queries")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&outDir, "out", "", "Output directory (default: .aura/wiki-export)")
+	return cmd
+}
+
+func newWikiGraphCmd(auraDir *string, jsonOut *bool) *cobra.Command {
+	return &cobra.Command{
+		Use:   "graph",
+		Short: "Show wiki connectivity stats — hubs, clusters, density",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engine, close, err := openWikiEngine(*auraDir)
+			if err != nil {
+				return err
+			}
+			defer close()
+
+			stats, err := engine.Graph()
+			if err != nil {
+				return err
+			}
+
+			if *jsonOut {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(stats)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "pages:    %d\n", stats.TotalPages)
+			fmt.Fprintf(cmd.OutOrStdout(), "edges:    %d\n", stats.TotalEdges)
+			fmt.Fprintf(cmd.OutOrStdout(), "density:  %.3f\n", stats.Density)
+			fmt.Fprintf(cmd.OutOrStdout(), "avg links: %.1f\n", stats.AvgLinks)
+			fmt.Fprintf(cmd.OutOrStdout(), "clusters: %d\n", len(stats.Clusters))
+			fmt.Fprintln(cmd.OutOrStdout())
+
+			// Categories.
+			if len(stats.Categories) > 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "categories:")
+				for cat, count := range stats.Categories {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %-15s %d\n", cat, count)
+				}
+				fmt.Fprintln(cmd.OutOrStdout())
+			}
+
+			// Top hubs.
+			if len(stats.Hubs) > 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "top hubs:")
+				fmt.Fprintf(cmd.OutOrStdout(), "  %-30s %5s %5s %5s\n", "SLUG", "IN", "OUT", "TOTAL")
+				for _, h := range stats.Hubs {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %-30s %5d %5d %5d\n",
+						truncateStr(h.Slug, 30), h.Inbound, h.Outbound, h.Total)
+				}
+				fmt.Fprintln(cmd.OutOrStdout())
+			}
+
+			// Clusters.
+			if len(stats.Clusters) > 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "clusters:")
+				for _, c := range stats.Clusters {
+					preview := strings.Join(c.Pages, ", ")
+					if len(preview) > 60 {
+						preview = preview[:60] + "…"
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "  #%d (%d pages): %s\n", c.ID, c.Size, preview)
+				}
+			}
+
+			// Orphans.
+			if len(stats.Orphans) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nisolated pages (%d):\n", len(stats.Orphans))
+				for _, o := range stats.Orphans {
+					fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", o)
+				}
+			}
+
+			return nil
+		},
+	}
 }
