@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/ojuschugh1/aura/internal/cli"
+	"github.com/ojuschugh1/aura/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -24,6 +26,29 @@ var rootCmd = &cobra.Command{
 }
 
 func main() {
+	// When the binary is forked as the daemon process (AURA_DAEMON=1),
+	// bypass cobra entirely and run the daemon loop directly.
+	// The forked process has no subcommand, so cobra would just print help.
+	if daemon.IsDaemonProcess() {
+		dir := os.Getenv("AURA_DIR")
+		if dir == "" {
+			home, _ := os.UserHomeDir()
+			dir = filepath.Join(home, ".aura")
+		}
+		portEnv, _ := strconv.Atoi(os.Getenv("AURA_PORT"))
+		if portEnv == 0 {
+			portEnv = daemon.DefaultPort
+		}
+		sessID := os.Getenv("AURA_SESSION")
+		if err := daemon.RecoverAndLog(dir, func() error {
+			return daemon.RunDaemon(dir, portEnv, sessID)
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "daemon error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		fmt.Fprintf(os.Stderr, "run 'aura --help' for usage\n")
