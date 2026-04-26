@@ -2,6 +2,8 @@ package wiki
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -22,6 +24,73 @@ func NewEngine(store *Store) *Engine {
 // Store returns the underlying wiki store for direct access.
 func (e *Engine) Store() *Store {
 	return e.store
+}
+
+// BatchIngestResult summarises a batch ingestion of multiple files.
+type BatchIngestResult struct {
+	Total        int              `json:"total"`
+	Ingested     int              `json:"ingested"`
+	Duplicates   int              `json:"duplicates"`
+	Errors       int              `json:"errors"`
+	Results      []*IngestResult  `json:"results"`
+	ErrorDetails []string         `json:"error_details,omitempty"`
+}
+
+// BatchIngest processes all supported files in a directory.
+func (e *Engine) BatchIngest(dir string) (*BatchIngestResult, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read directory: %w", err)
+	}
+
+	result := &BatchIngestResult{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if ext != ".md" && ext != ".markdown" && ext != ".txt" && ext != ".jsonl" {
+			continue
+		}
+
+		result.Total++
+		path := filepath.Join(dir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			result.Errors++
+			result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("%s: %v", entry.Name(), err))
+			continue
+		}
+
+		format := "text"
+		switch ext {
+		case ".md", ".markdown":
+			format = "markdown"
+		case ".jsonl":
+			format = "jsonl"
+		}
+
+		ir, err := e.Ingest(entry.Name(), string(data), format, path)
+		if err != nil {
+			result.Errors++
+			result.ErrorDetails = append(result.ErrorDetails, fmt.Sprintf("%s: %v", entry.Name(), err))
+			continue
+		}
+
+		result.Results = append(result.Results, ir)
+		if ir.Duplicate {
+			result.Duplicates++
+		} else {
+			result.Ingested++
+		}
+	}
+
+	_ = e.store.AppendLog("batch-ingest",
+		fmt.Sprintf("Batch ingested from %s: %d files, %d new, %d duplicates, %d errors",
+			dir, result.Total, result.Ingested, result.Duplicates, result.Errors),
+		nil, nil)
+
+	return result, nil
 }
 
 // IngestResult summarises what happened during source ingestion.
@@ -129,6 +198,7 @@ type QueryResult struct {
 	Pages        []*types.WikiPage  `json:"pages"`
 	Answer       string             `json:"answer"`
 	PageCount    int                `json:"page_count"`
+	SavedSlug    string             `json:"saved_slug,omitempty"` // set when answer is filed as a page
 }
 
 // Query searches the wiki for pages matching the query string.
@@ -168,6 +238,53 @@ func (e *Engine) Query(query string) (*QueryResult, error) {
 	_ = e.store.AppendLog("query", fmt.Sprintf("Query: %s (%d results)", query, len(pages)), slugs, nil)
 
 	return result, nil
+}
+
+// SaveQueryResult files a query answer back into the wiki as a new synthesis page.
+// This implements the gist's insight: "good answers can be filed back into the wiki
+// as new pages... these are valuable and shouldn't disappear into chat history."
+func (e *Engine) SaveQueryResult(result *QueryResult) (string, error) {
+	slug := slugify("synthesis-" + result.Query)
+	title := "Synthesis: " + result.Query
+
+	// Collect source page slugs as links.
+	var links []string
+	for _, p := range result.Pages {
+		links = append(links, p.Slug)
+	}
+
+	// Collect source IDs from contributing pages.
+	var sourceIDs []int64
+	seen := make(map[int64]bool)
+	for _, p := range result.Pages {
+		for _, id := range p.SourceIDs {
+			if !seen[id] {
+				sourceIDs = append(sourceIDs, id)
+				seen[id] = true
+			}
+		}
+	}
+
+	content := fmt.Sprintf("# %s\n\n*Query: %q — %d source pages*\n\n%s",
+		title, result.Query, result.PageCount, result.Answer)
+
+	existing, _ := e.store.GetPage(slug)
+	if existing != nil {
+		_, err := e.store.UpdatePage(slug, content, []string{"synthesis", "auto-saved"}, sourceIDs, links)
+		if err != nil {
+			return "", fmt.Errorf("update synthesis page: %w", err)
+		}
+	} else {
+		_, err := e.store.CreatePage(slug, title, content, "synthesis",
+			[]string{"synthesis", "auto-saved"}, sourceIDs, links)
+		if err != nil {
+			return "", fmt.Errorf("create synthesis page: %w", err)
+		}
+	}
+
+	_ = e.store.AppendLog("save", fmt.Sprintf("Saved query answer: %s", result.Query), []string{slug}, nil)
+
+	return slug, nil
 }
 
 // Lint performs a health check on the wiki and returns issues found.
@@ -216,10 +333,13 @@ func (e *Engine) Lint() (*types.WikiLintResult, error) {
 	// Deduplicate missing pages.
 	result.MissingPages = dedup(result.MissingPages)
 
+	// Detect contradictions across pages.
+	result.Contradictions = findContradictions(pages)
+
 	// Calculate health score.
 	if result.TotalPages > 0 {
-		issues := len(result.Orphans) + len(result.Stale) + len(result.MissingPages)
-		result.HealthScore = 1.0 - float64(issues)/float64(result.TotalPages*3)
+		issues := len(result.Orphans) + len(result.Stale) + len(result.MissingPages) + len(result.Contradictions)
+		result.HealthScore = 1.0 - float64(issues)/float64(result.TotalPages*4)
 		if result.HealthScore < 0 {
 			result.HealthScore = 0
 		}
@@ -227,9 +347,9 @@ func (e *Engine) Lint() (*types.WikiLintResult, error) {
 
 	// Log the lint pass.
 	_ = e.store.AppendLog("lint",
-		fmt.Sprintf("Lint: %d pages, %d orphans, %d stale, %d missing, score=%.2f",
+		fmt.Sprintf("Lint: %d pages, %d orphans, %d stale, %d missing, %d contradictions, score=%.2f",
 			result.TotalPages, len(result.Orphans), len(result.Stale),
-			len(result.MissingPages), result.HealthScore),
+			len(result.MissingPages), len(result.Contradictions), result.HealthScore),
 		nil, nil)
 
 	return result, nil
