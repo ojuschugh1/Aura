@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // migration holds a single DDL statement to execute.
@@ -178,6 +179,43 @@ CREATE TABLE IF NOT EXISTS wiki_log (
 	{"idx_wiki_log_action", "CREATE INDEX IF NOT EXISTS idx_wiki_log_action ON wiki_log(action)"},
 	{"idx_wiki_log_timestamp", "CREATE INDEX IF NOT EXISTS idx_wiki_log_timestamp ON wiki_log(timestamp)"},
 
+	// Wiki metabolism columns (v0.9 — knowledge lifecycle).
+	// These use a helper that ignores "duplicate column" errors.
+	{"wiki_pages_vitality", "ALTER TABLE wiki_pages ADD COLUMN vitality REAL DEFAULT 1.0"},
+	{"wiki_pages_access_tier", "ALTER TABLE wiki_pages ADD COLUMN access_tier TEXT DEFAULT 'public'"},
+	{"wiki_pages_query_count", "ALTER TABLE wiki_pages ADD COLUMN query_count INTEGER DEFAULT 0"},
+	{"wiki_pages_last_queried", "ALTER TABLE wiki_pages ADD COLUMN last_queried TEXT"},
+
+	// Contradiction pressure tracking.
+	{"wiki_pressure", `
+CREATE TABLE IF NOT EXISTS wiki_pressure (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_slug   TEXT    NOT NULL,
+    source_slug   TEXT    NOT NULL,
+    evidence      TEXT    NOT NULL,
+    pressure_type TEXT    NOT NULL DEFAULT 'contradiction',
+    resolved      INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(target_slug, source_slug, pressure_type)
+)`},
+	{"idx_pressure_target", "CREATE INDEX IF NOT EXISTS idx_pressure_target ON wiki_pressure(target_slug)"},
+	{"idx_pressure_resolved", "CREATE INDEX IF NOT EXISTS idx_pressure_resolved ON wiki_pressure(resolved)"},
+
+	// Immutable audit chain.
+	{"wiki_audit", `
+CREATE TABLE IF NOT EXISTS wiki_audit (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_slug   TEXT    NOT NULL,
+    action      TEXT    NOT NULL,
+    agent       TEXT    NOT NULL DEFAULT 'system',
+    prev_hash   TEXT    NOT NULL DEFAULT '',
+    entry_hash  TEXT    NOT NULL,
+    summary     TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+)`},
+	{"idx_audit_slug", "CREATE INDEX IF NOT EXISTS idx_audit_slug ON wiki_audit(page_slug)"},
+	{"idx_audit_hash", "CREATE INDEX IF NOT EXISTS idx_audit_hash ON wiki_audit(entry_hash)"},
+
 	// Context connections — typed relationships between memory entries.
 	{"memory_edges", `
 CREATE TABLE IF NOT EXISTS memory_edges (
@@ -197,9 +235,14 @@ CREATE TABLE IF NOT EXISTS memory_edges (
 }
 
 // RunMigrations executes all schema migrations. All statements are idempotent.
+// ALTER TABLE statements may fail with "duplicate column" which is silently ignored.
 func RunMigrations(db *sql.DB) error {
 	for _, m := range migrations {
 		if _, err := db.Exec(m.sql); err != nil {
+			// ALTER TABLE ADD COLUMN fails if column already exists — that's fine.
+			if strings.Contains(m.sql, "ALTER TABLE") && strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
 			return fmt.Errorf("migration %s: %w", m.name, err)
 		}
 	}

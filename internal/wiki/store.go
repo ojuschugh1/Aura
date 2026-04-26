@@ -125,7 +125,8 @@ func (s *Store) UpdatePage(slug, content string, tags []string, sourceIDs []int6
 // GetPage retrieves a wiki page by slug.
 func (s *Store) GetPage(slug string) (*types.WikiPage, error) {
 	row := s.db.QueryRow(`
-		SELECT id, slug, title, content, category, tags, source_ids, links, created_at, updated_at
+		SELECT id, slug, title, content, category, tags, source_ids, links, created_at, updated_at,
+		       vitality, access_tier, query_count, last_queried
 		FROM wiki_pages WHERE slug = ?`, slug,
 	)
 	return scanPage(row)
@@ -145,7 +146,8 @@ func (s *Store) DeletePage(slug string) error {
 
 // ListPages returns all pages, optionally filtered by category.
 func (s *Store) ListPages(category string) ([]*types.WikiPage, error) {
-	query := `SELECT id, slug, title, content, category, tags, source_ids, links, created_at, updated_at
+	query := `SELECT id, slug, title, content, category, tags, source_ids, links, created_at, updated_at,
+	                 vitality, access_tier, query_count, last_queried
 	          FROM wiki_pages`
 	var args []any
 	if category != "" {
@@ -175,7 +177,8 @@ func (s *Store) ListPages(category string) ([]*types.WikiPage, error) {
 func (s *Store) SearchPages(query string) ([]*types.WikiPage, error) {
 	pattern := "%" + strings.ToLower(query) + "%"
 	rows, err := s.db.Query(`
-		SELECT id, slug, title, content, category, tags, source_ids, links, created_at, updated_at
+		SELECT id, slug, title, content, category, tags, source_ids, links, created_at, updated_at,
+		       vitality, access_tier, query_count, last_queried
 		FROM wiki_pages
 		WHERE LOWER(title) LIKE ? OR LOWER(content) LIKE ?
 		ORDER BY updated_at DESC`,
@@ -325,9 +328,14 @@ func scanPage(scanner interface{ Scan(...any) error }) (*types.WikiPage, error) 
 		tagsJSON, sourceIDsJSON  sql.NullString
 		linksJSON                sql.NullString
 		createdAt, updatedAt     string
+		vitality                 sql.NullFloat64
+		accessTier               sql.NullString
+		queryCount               sql.NullInt64
+		lastQueried              sql.NullString
 	)
 	err := scanner.Scan(&p.ID, &p.Slug, &p.Title, &p.Content, &p.Category,
-		&tagsJSON, &sourceIDsJSON, &linksJSON, &createdAt, &updatedAt)
+		&tagsJSON, &sourceIDsJSON, &linksJSON, &createdAt, &updatedAt,
+		&vitality, &accessTier, &queryCount, &lastQueried)
 	if err != nil {
 		return nil, fmt.Errorf("scan page: %w", err)
 	}
@@ -345,6 +353,24 @@ func scanPage(scanner interface{ Scan(...any) error }) (*types.WikiPage, error) 
 	}
 	if linksJSON.Valid && linksJSON.String != "" {
 		_ = json.Unmarshal([]byte(linksJSON.String), &p.LinksSlugs)
+	}
+	if vitality.Valid {
+		p.Vitality = vitality.Float64
+	} else {
+		p.Vitality = 1.0
+	}
+	if accessTier.Valid && accessTier.String != "" {
+		p.AccessTier = accessTier.String
+	} else {
+		p.AccessTier = "public"
+	}
+	if queryCount.Valid {
+		p.QueryCount = int(queryCount.Int64)
+	}
+	if lastQueried.Valid && lastQueried.String != "" {
+		if t, err := time.Parse(time.RFC3339Nano, lastQueried.String); err == nil {
+			p.LastQueried = &t
+		}
 	}
 	return &p, nil
 }

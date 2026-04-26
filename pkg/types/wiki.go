@@ -4,16 +4,20 @@ import "time"
 
 // WikiPage represents a single page in the LLM-maintained wiki.
 type WikiPage struct {
-	ID         int64     `json:"id"`
-	Slug       string    `json:"slug"`
-	Title      string    `json:"title"`
-	Content    string    `json:"content"`
-	Category   string    `json:"category"` // entity, concept, source, synthesis, comparison
-	Tags       []string  `json:"tags,omitempty"`
-	SourceIDs  []int64   `json:"source_ids,omitempty"` // raw sources that contributed
-	LinksSlugs []string  `json:"links,omitempty"`      // outbound cross-references
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID          int64     `json:"id"`
+	Slug        string    `json:"slug"`
+	Title       string    `json:"title"`
+	Content     string    `json:"content"`
+	Category    string    `json:"category"`    // entity, concept, source, synthesis, comparison
+	Tags        []string  `json:"tags,omitempty"`
+	SourceIDs   []int64   `json:"source_ids,omitempty"` // raw sources that contributed
+	LinksSlugs  []string  `json:"links,omitempty"`      // outbound cross-references
+	Vitality    float64   `json:"vitality"`              // 0.0–1.0, decays over time
+	AccessTier  string    `json:"access_tier"`           // public, team, private
+	QueryCount  int       `json:"query_count"`           // times this page was read/queried
+	LastQueried *time.Time `json:"last_queried,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // WikiSource represents an immutable raw source document ingested into the wiki.
@@ -75,4 +79,48 @@ type WikiSuggestion struct {
 	Type    string `json:"type"`    // "create_page", "add_source", "investigate", "split_page", "add_links"
 	Target  string `json:"target"`  // the slug or topic this applies to
 	Message string `json:"message"` // human-readable recommendation
+}
+
+// WikiPressure tracks accumulated contradictory evidence against a page.
+// When pressure from multiple sources exceeds a threshold, the system
+// recommends revising the established belief.
+type WikiPressure struct {
+	ID           int64     `json:"id"`
+	TargetSlug   string    `json:"target_slug"`   // the page under pressure
+	SourceSlug   string    `json:"source_slug"`   // the page providing contradicting evidence
+	Evidence     string    `json:"evidence"`       // description of the contradiction
+	PressureType string    `json:"pressure_type"`  // "contradiction", "superseded", "disputed"
+	Resolved     bool      `json:"resolved"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// WikiAuditEntry is a single immutable record in the audit chain.
+// Each entry's hash includes the previous entry's hash, forming a
+// tamper-evident chain similar to a blockchain.
+type WikiAuditEntry struct {
+	ID        int64     `json:"id"`
+	PageSlug  string    `json:"page_slug"`
+	Action    string    `json:"action"`    // "create", "update", "delete", "consolidate", "decay"
+	Agent     string    `json:"agent"`     // who performed the action
+	PrevHash  string    `json:"prev_hash"` // hash of the previous audit entry
+	EntryHash string    `json:"entry_hash"` // SHA-256 of (prev_hash + slug + action + summary + timestamp)
+	Summary   string    `json:"summary"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// MetabolismResult holds the outcome of a metabolism cycle.
+type MetabolismResult struct {
+	PagesDecayed      int                `json:"pages_decayed"`
+	PagesConsolidated int                `json:"pages_consolidated"`
+	PagesArchived     int                `json:"pages_archived"`
+	PressureAlerts    []PressureAlert    `json:"pressure_alerts,omitempty"`
+	Suggestions       []WikiSuggestion   `json:"suggestions,omitempty"`
+}
+
+// PressureAlert is raised when accumulated contradictions exceed the threshold.
+type PressureAlert struct {
+	TargetSlug    string   `json:"target_slug"`
+	PressureCount int      `json:"pressure_count"`
+	Sources       []string `json:"sources"`
+	Message       string   `json:"message"`
 }
