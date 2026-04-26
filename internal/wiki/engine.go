@@ -12,18 +12,28 @@ import (
 )
 
 // Engine orchestrates wiki operations: ingest, query, lint.
+// Engine orchestrates wiki operations: ingest, query, lint, metabolism.
 type Engine struct {
 	store *Store
+	audit *AuditChain
 }
 
 // NewEngine creates an Engine backed by the given store.
 func NewEngine(store *Store) *Engine {
-	return &Engine{store: store}
+	return &Engine{
+		store: store,
+		audit: NewAuditChain(store.db),
+	}
 }
 
 // Store returns the underlying wiki store for direct access.
 func (e *Engine) Store() *Store {
 	return e.store
+}
+
+// Audit returns the audit chain for direct access.
+func (e *Engine) Audit() *AuditChain {
+	return e.audit
 }
 
 // BatchIngestResult summarises a batch ingestion of multiple files.
@@ -189,6 +199,14 @@ func (e *Engine) Ingest(title, content, format, origin string) (*IngestResult, e
 	allSlugs := append(result.PagesCreated, result.PagesUpdated...)
 	_ = e.store.AppendLog("ingest", fmt.Sprintf("Ingested: %s", title), allSlugs, &src.ID)
 
+	// Audit trail for each page mutation.
+	for _, s := range result.PagesCreated {
+		_ = e.audit.Record(s, "create", "ingest", fmt.Sprintf("Created from source: %s", title))
+	}
+	for _, s := range result.PagesUpdated {
+		_ = e.audit.Record(s, "update", "ingest", fmt.Sprintf("Updated from source: %s", title))
+	}
+
 	return result, nil
 }
 
@@ -230,10 +248,11 @@ func (e *Engine) Query(query string) (*QueryResult, error) {
 		result.Answer = fmt.Sprintf("No wiki pages found matching %q.", query)
 	}
 
-	// Log the query.
+	// Log the query and record access for metabolism.
 	var slugs []string
 	for _, p := range pages {
 		slugs = append(slugs, p.Slug)
+		e.store.RecordQueryAccess(p.Slug)
 	}
 	_ = e.store.AppendLog("query", fmt.Sprintf("Query: %s (%d results)", query, len(pages)), slugs, nil)
 
@@ -335,6 +354,12 @@ func (e *Engine) Lint() (*types.WikiLintResult, error) {
 
 	// Detect contradictions across pages.
 	result.Contradictions = findContradictions(pages)
+
+	// Record contradiction pressure for each detected conflict.
+	for _, c := range result.Contradictions {
+		_ = e.store.RecordPressure(c.PageA, c.PageB, c.Snippet, "contradiction")
+		_ = e.store.RecordPressure(c.PageB, c.PageA, c.Snippet, "contradiction")
+	}
 
 	// Generate actionable suggestions.
 	result.Suggestions = generateSuggestions(pages, result, inbound)
