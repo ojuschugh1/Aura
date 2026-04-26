@@ -588,3 +588,64 @@ func (h *handlers) wikiFeedJSON(_ context.Context, params map[string]interface{}
 	}
 	return result, nil
 }
+
+func (h *handlers) wikiSchema(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	format, _ := stringParam(params, "format")
+	var schemaFormat wiki.SchemaFormat
+	switch format {
+	case "claude":
+		schemaFormat = wiki.SchemaClaudeCode
+	case "cursor":
+		schemaFormat = wiki.SchemaCursor
+	case "kiro":
+		schemaFormat = wiki.SchemaKiro
+	case "codex":
+		schemaFormat = wiki.SchemaCodex
+	default:
+		schemaFormat = wiki.SchemaGeneric
+	}
+	schema := h.wikiEngine.GenerateSchema(schemaFormat)
+	return map[string]string{"schema": schema}, nil
+}
+
+func (h *handlers) wikiFilter(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	expr, ok := stringParam(params, "filter")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: filter expression is required")
+	}
+	filters, err := wiki.ParseFilters(expr)
+	if err != nil {
+		return nil, err
+	}
+	pages, err := h.wikiEngine.Store().ListPages("")
+	if err != nil {
+		return nil, err
+	}
+	matched, err := wiki.FilterPages(pages, filters)
+	if err != nil {
+		return nil, err
+	}
+	return matched, nil
+}
+
+func (h *handlers) wikiIngestURL(_ context.Context, params map[string]interface{}) (interface{}, error) {
+	if h.wikiEngine == nil {
+		return nil, fmt.Errorf("wiki engine not initialised")
+	}
+	url, ok := stringParam(params, "url")
+	if !ok {
+		return nil, fmt.Errorf("INVALID_PARAMS: url is required")
+	}
+	title, _ := stringParam(params, "title")
+	result, err := h.wikiEngine.FetchAndIngest(url, title)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}

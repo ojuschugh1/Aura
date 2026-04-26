@@ -72,4 +72,7 @@ func RegisterWikiTools(s *Server, engine *wiki.Engine) {
 	s.Register("wiki_feed_claimcheck", h.wikiFeedClaimCheck)
 	s.Register("wiki_feed_etch", h.wikiFeedEtch)
 	s.Register("wiki_feed_json", h.wikiFeedJSON)
+	s.Register("wiki_schema", h.wikiSchema)
+	s.Register("wiki_filter", h.wikiFilter)
+	s.Register("wiki_ingest_url", h.wikiIngestURL)
 }
