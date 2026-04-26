@@ -1,5 +1,8 @@
 # Aura
 
+[![CI](https://github.com/ojuschugh1/Aura/actions/workflows/ci.yml/badge.svg)](https://github.com/ojuschugh1/Aura/actions/workflows/ci.yml)
+[![Release](https://github.com/ojuschugh1/Aura/actions/workflows/release.yml/badge.svg)](https://github.com/ojuschugh1/Aura/releases/latest)
+
 **Your AI remembers what it did, and proves it.**
 
 Aura is a local-first daemon that gives every AI tool you use — Claude Code, Cursor, Kiro, Gemini CLI — persistent memory, claim verification, token compression, dependency scanning, and a compounding knowledge wiki. One binary. Zero cloud. Works across tools.

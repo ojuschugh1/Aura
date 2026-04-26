@@ -1,3 +1,5 @@
 aura
 *.exe
 .aura/
+bin/
+dist/
