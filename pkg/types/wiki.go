@@ -53,13 +53,14 @@ type WikiIndexEntry struct {
 
 // WikiLintResult reports health issues found during a wiki lint pass.
 type WikiLintResult struct {
-	Orphans        []string          `json:"orphans"`         // pages with no inbound links
-	Contradictions []WikiContradiction `json:"contradictions"` // conflicting claims across pages
-	Stale          []string          `json:"stale"`           // pages not updated in 30+ days
-	MissingPages   []string          `json:"missing_pages"`   // slugs referenced but not existing
-	TotalPages     int               `json:"total_pages"`
-	TotalSources   int               `json:"total_sources"`
-	HealthScore    float64           `json:"health_score"`    // 0.0–1.0
+	Orphans        []string            `json:"orphans"`         // pages with no inbound links
+	Contradictions []WikiContradiction `json:"contradictions"`  // conflicting claims across pages
+	Stale          []string            `json:"stale"`           // pages not updated in 30+ days
+	MissingPages   []string            `json:"missing_pages"`   // slugs referenced but not existing
+	Suggestions    []WikiSuggestion    `json:"suggestions"`     // actionable recommendations
+	TotalPages     int                 `json:"total_pages"`
+	TotalSources   int                 `json:"total_sources"`
+	HealthScore    float64             `json:"health_score"`    // 0.0–1.0
 }
 
 // WikiContradiction flags two pages with potentially conflicting content.
@@ -67,4 +68,11 @@ type WikiContradiction struct {
 	PageA   string `json:"page_a"`
 	PageB   string `json:"page_b"`
 	Snippet string `json:"snippet"` // the conflicting text
+}
+
+// WikiSuggestion is an actionable recommendation from the lint pass.
+type WikiSuggestion struct {
+	Type    string `json:"type"`    // "create_page", "add_source", "investigate", "split_page", "add_links"
+	Target  string `json:"target"`  // the slug or topic this applies to
+	Message string `json:"message"` // human-readable recommendation
 }
