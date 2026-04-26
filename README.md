@@ -87,17 +87,21 @@ aura replay <session_id>         # replay and diff
 
 **Auto-capture** — Automatically extracts decisions from AI sessions ("we decided to use PostgreSQL", "going with microservices") and stores them in memory without manual effort.
 
-**Knowledge wiki** — A persistent, compounding knowledge base maintained by your AI tools. Ingest sources once, and Aura builds interlinked pages — summaries, entity pages, concept pages — that get richer with every source you add and every question you ask. Inspired by [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
+**Knowledge wiki** — A persistent, compounding knowledge base maintained by your AI tools. Ingest sources once, and Aura builds interlinked pages — summaries, entity pages, concept pages — that get richer with every source you add and every question you ask. Export to Obsidian-compatible markdown with YAML frontmatter and `[[wikilinks]]`. Inspired by [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
 
 ```
 aura wiki ingest design.md        # ingest a source document
 # ingested: design.md (source #1)
 # created:  design-md, architecture-overview, database-layer
 
+aura wiki ingest --dir ./docs     # batch ingest a whole folder
+
 aura wiki query "authentication"  # search and synthesise
 # found 3 page(s):
 # ## Authentication
 # JWT tokens with 24-hour expiry...
+
+aura wiki query "auth" --save     # file the answer as a synthesis page
 
 aura wiki lint                    # health-check the wiki
 # pages:   12
@@ -106,12 +110,17 @@ aura wiki lint                    # health-check the wiki
 # orphans (2):
 #   - old-api-notes
 #   - unused-concept
+# contradictions (1):
+#   - page-old vs page-new: uses MySQL vs uses PostgreSQL
 
-aura wiki ls                      # browse all pages
-aura wiki show <slug>             # read a specific page
-aura wiki log                     # see the wiki's evolution
-aura wiki index                   # full catalog of all pages
-aura wiki sources                 # list all ingested raw sources
+aura wiki graph                   # connectivity analysis
+# pages:    12
+# edges:    34
+# density:  0.258
+# clusters: 2
+
+aura wiki export                  # Obsidian-compatible markdown + YAML frontmatter
+# exported 12 pages to ~/.aura/wiki-export
 ```
 
 ## Install
@@ -380,8 +389,10 @@ aura trust --path ./src/test     # auto-approve writes to test dir
 
 aura wiki ingest <file>          # ingest a source into the wiki
 aura wiki ingest <text> --title  # ingest inline text
+aura wiki ingest --dir <folder>  # batch ingest all files in a directory
 aura wiki query <terms>          # search wiki and synthesise answer
-aura wiki lint                   # health-check: orphans, stale, missing refs
+aura wiki query <terms> --save   # search and file the answer as a wiki page
+aura wiki lint                   # health-check: orphans, stale, missing refs, contradictions
 aura wiki ls                     # list all wiki pages
 aura wiki ls --category entity   # filter by category
 aura wiki show <slug>            # show full page content
@@ -389,6 +400,9 @@ aura wiki search <query>         # search pages by title/content
 aura wiki log                    # show wiki activity log
 aura wiki index                  # show full wiki catalog
 aura wiki sources                # list all ingested raw sources
+aura wiki export                 # export as Obsidian-compatible markdown with YAML frontmatter
+aura wiki export --out <dir>     # export to a specific directory
+aura wiki graph                  # connectivity stats: hubs, clusters, density
 aura wiki rm <slug>              # delete a wiki page
 
 aura setup <tool>                # generate MCP config (claude/cursor/kiro)
