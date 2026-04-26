@@ -11,7 +11,7 @@ Aura is a local-first daemon that gives every AI tool you use — Claude Code, C
 
 **[📖 Full Documentation](https://ojuschugh1.github.io/Aura)** · **[Releases](https://github.com/ojuschugh1/Aura/releases)** · **[Issues](https://github.com/ojuschugh1/Aura/issues)**
 
-**Current status: v0.9-dev** — 21 packages, ~20,000 lines of Go, 470+ passing tests.
+**Current status: v0.9-dev** — 21 packages, 470+ passing tests.
 
 ---
 
