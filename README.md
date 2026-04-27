@@ -50,6 +50,18 @@ aura init
 
 ## What it does
 
+### Claim verification
+
+The most novel thing Aura does. When your AI says "I created the file and installed the package" — Aura checks whether that's actually true.
+
+```bash
+aura verify
+# Truth score: 83%
+# [PASS] created src/auth.ts       — file exists
+# [FAIL] installed jsonwebtoken    — not found in lockfile
+# [PASS] modified config.toml      — found in git diff
+```
+
 ### Cross-tool memory
 
 Store decisions and context once. Every AI tool reads from the same store.
@@ -58,18 +70,6 @@ Store decisions and context once. Every AI tool reads from the same store.
 aura memory add "auth"  "JWT tokens, 24h expiry, refresh via httpOnly cookie"
 aura memory add "stack" "Go backend, React frontend, PostgreSQL"
 aura memory ls
-```
-
-### Claim verification
-
-Parse what the AI said it did. Check it against the real filesystem and git history.
-
-```bash
-aura verify
-# Truth score: 83%
-# [PASS] created src/auth.ts
-# [FAIL] installed jsonwebtoken — not found in lockfile
-# [PASS] modified config.toml
 ```
 
 ### Token compression
@@ -188,6 +188,8 @@ aura wiki schema --format kiro                # Kiro steering file
 ```
 
 All data stays on your machine in `~/.aura/`. Nothing leaves your system.
+
+**Rust tool dependencies** — sqz (compression), claimcheck (verification), and ghostdep (scanning) are optional Rust binaries. Aura's core features (memory, wiki, cost tracking, session traces, policy engine) work without them. If you have them installed via `cargo install`, Aura finds them automatically. The `--install-deps` flag downloads pre-built binaries, but this requires the Rust tools to have published GitHub Releases — check each tool's repo for availability.
 
 ---
 
@@ -323,28 +325,36 @@ The policy engine supports hot-reload — changes take effect within 5 seconds.
 
 ---
 
-## Why Aura vs alternatives
+## Why not just use Claude's built-in memory?
 
-| Feature | Aura | MemPalace | Mem0 | Engram |
-|---------|------|-----------|------|--------|
-| Cross-tool memory | ✅ | ❌ | ❌ | ✅ |
+Claude Projects, Cursor's context, and Copilot Workspace all have some form of memory. They work well within their own tool. The problem is they don't talk to each other.
+
+If you use Claude Code in the morning and Cursor in the afternoon, Claude's memory doesn't transfer. If you switch tools next month, you start from zero. And none of them verify whether the AI actually did what it claimed.
+
+Aura solves the **cross-tool** problem: one memory store, one wiki, one verification system that works with every MCP-compatible tool. It also does things no built-in memory does — claim verification, dependency scanning, cost tracking, knowledge metabolism.
+
+If you only use one AI tool and never switch, built-in memory is fine. If you use multiple tools, or care about verification, Aura fills the gap.
+
+---
+
+## How Aura compares
+
+Aura's unique strengths are cross-tool continuity, claim verification, and the self-improving wiki. Here's an honest comparison focused on what actually matters:
+
+| Capability | Aura | Claude Projects | Cursor Memory | OpenMemory (Mem0) |
+|-----------|------|----------------|---------------|-------------------|
+| Cross-tool memory | ✅ MCP-native | ❌ Claude only | ❌ Cursor only | ✅ MCP-native |
 | Claim verification | ✅ | ❌ | ❌ | ❌ |
-| Token compression | ✅ | ✅ | ❌ | ❌ |
-| Dependency scanning | ✅ | ❌ | ❌ | ❌ |
+| Knowledge wiki | ✅ compounding | ❌ | ❌ | ❌ |
+| Token compression | ✅ via sqz | ❌ | ❌ | ❌ |
+| Dependency scanning | ✅ via ghostdep | ❌ | ❌ | ❌ |
 | Cost tracking | ✅ | ❌ | ❌ | ❌ |
-| Action escrow | ✅ | ❌ | ❌ | ❌ |
-| Doom loop detection | ✅ | ❌ | ❌ | ❌ |
-| Model routing | ✅ | ❌ | ❌ | ❌ |
-| Session traces | ✅ | ❌ | ❌ | ❌ |
-| Auto-capture | ✅ | ❌ | ❌ | ❌ |
-| Knowledge wiki | ✅ | ❌ | ❌ | ❌ |
-| Self-improving (auto-learn) | ✅ | ❌ | ❌ | ❌ |
-| Memory metabolism | ✅ | ❌ | ❌ | ❌ |
-| Immutable audit chain | ✅ | ❌ | ❌ | ❌ |
-| Knowledge map (HTML) | ✅ | ❌ | ❌ | ❌ |
-| Graph traversal | ✅ | ❌ | ❌ | ❌ |
-| Single binary (Go) | ✅ | ❌ (Python) | ❌ (Python) | ✅ |
-| Local-first | ✅ | ✅ | ❌ | ✅ |
+| Local-first / private | ✅ SQLite on disk | ⚠️ cloud-stored | ⚠️ cloud-stored | ✅ self-hosted option |
+| Single binary install | ✅ Go | N/A (built-in) | N/A (built-in) | ❌ Python |
+| Auto-learning | ✅ daemon-level | ❌ | ❌ | ❌ |
+| Audit trail | ✅ tamper-evident | ❌ | ❌ | ❌ |
+
+**Where others are better:** Claude Projects has deeper integration with Claude's context window. Cursor's memory is zero-config within Cursor. Mem0's cloud offering has team sync built in. Aura trades those conveniences for cross-tool portability and verification.
 
 ---
 
