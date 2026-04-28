@@ -1,17 +1,21 @@
 package daemon
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/ojuschugh1/aura/internal/autocapture"
 	"github.com/ojuschugh1/aura/internal/db"
+	mcpsrv "github.com/ojuschugh1/aura/internal/mcp"
 	"github.com/ojuschugh1/aura/internal/memory"
 	"github.com/ojuschugh1/aura/internal/session"
 	"github.com/ojuschugh1/aura/internal/wiki"
@@ -160,6 +164,38 @@ func RunDaemon(dir string, port int, sessionID string) error {
 	autoLearner.Start(wiki.DefaultAutoLearnConfig())
 	defer autoLearner.Stop()
 
+	// Start the real MCP server on localhost:7437.
+	// This is what AI tools connect to via MCP protocol.
+	mcpSecret := loadMCPSecret(dir)
+	realMCP := mcpsrv.New(7437, mcpSecret)
+
+	// Register all MCP tools.
+	mcpsrv.RegisterCoreTools(realMCP, store, database)
+	mcpsrv.RegisterWikiTools(realMCP, wikiEngine)
+	mcpsrv.RegisterTraceTools(realMCP, tracesDir)
+
+	// Real-time auto-capture: watches every MCP call and captures
+	// decisions from text content automatically.
+	realtimeCapture := autocapture.NewRealtimeCapture(captureEngine, sessionID)
+	realMCP.Use(realtimeCapture.Middleware())
+
+	// Also hook auto-learner's tool result handler for wiki feeding.
+	realMCP.Use(func(tool string, params map[string]interface{}, result interface{}) {
+		sid, _ := params["session_id"].(string)
+		if sid == "" {
+			sid = sessionID
+		}
+		resultJSON, _ := json.Marshal(result)
+		autoLearner.OnToolResult(tool, sid, resultJSON)
+	})
+
+	if err := realMCP.Start(); err != nil {
+		slog.Warn("mcp server failed to start on 7437", "err", err)
+	} else {
+		slog.Info("mcp server started", "port", 7437)
+	}
+	defer realMCP.Stop(context.Background())
+
 	sessMgr.SetOnEndHook(func(sessionID string) {
 		go func() {
 			// Auto-capture decisions into memory (existing behavior).
@@ -262,4 +298,23 @@ func waitForStop() {
 	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
 	<-ch
 	signal.Stop(ch)
+}
+
+// loadMCPSecret reads the shared_secret from config.toml.
+// Falls back to an empty string (which disables auth) if not found.
+func loadMCPSecret(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "shared_secret") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				return strings.Trim(strings.TrimSpace(parts[1]), `"`)
+			}
+		}
+	}
+	return ""
 }

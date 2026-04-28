@@ -18,7 +18,14 @@ type Server struct {
 	handlers map[string]ToolHandler
 	mu       sync.RWMutex
 	httpSrv  *http.Server
+	// middlewares run after each tool call succeeds. They get the tool name,
+	// input params, and result. Used for real-time auto-capture.
+	middlewares []PostCallMiddleware
 }
+
+// PostCallMiddleware is called after every successful tool invocation.
+// It runs asynchronously — errors are logged but don't affect the response.
+type PostCallMiddleware func(tool string, params map[string]interface{}, result interface{})
 
 // ToolHandler is a function that handles an MCP tool call.
 type ToolHandler func(ctx context.Context, params map[string]interface{}) (interface{}, error)
@@ -38,6 +45,14 @@ func (s *Server) Register(name string, h ToolHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handlers[name] = h
+}
+
+// Use registers a post-call middleware that runs asynchronously after
+// every successful tool invocation.
+func (s *Server) Use(mw PostCallMiddleware) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.middlewares = append(s.middlewares, mw)
 }
 
 // Start begins listening for MCP requests. It returns once the listener is ready.
@@ -126,6 +141,21 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(mcpResponse{Error: &mcpError{Code: "TOOL_ERROR", Message: err.Error()}})
 		return
+	}
+
+	// Run post-call middlewares asynchronously (real-time auto-capture).
+	s.mu.RLock()
+	mws := append([]PostCallMiddleware(nil), s.middlewares...)
+	s.mu.RUnlock()
+	for _, mw := range mws {
+		go func(fn PostCallMiddleware) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Warn("middleware panicked", "tool", req.Tool, "err", r)
+				}
+			}()
+			fn(req.Tool, req.Params, result)
+		}(mw)
 	}
 
 	_ = json.NewEncoder(w).Encode(mcpResponse{Result: result})
