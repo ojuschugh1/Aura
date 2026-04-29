@@ -7,11 +7,11 @@
 
 **Your AI remembers what it did, proves it, and gets smarter every session.**
 
-Aura is a local-first daemon that gives every AI tool you use — Claude Code, Cursor, Kiro, Gemini CLI — persistent memory, claim verification, token compression, dependency scanning, and a self-improving knowledge wiki. One binary. Zero cloud. Works across all tools.
+Aura is a local-first daemon that gives every AI tool you use — Claude Code, Cursor, Kiro, Gemini CLI — persistent memory, claim verification, MCP traffic observability, OWASP compliance scoring, and a self-improving knowledge wiki. One binary. Zero cloud. Works across all tools.
 
 **[📖 Full Documentation](https://ojuschugh1.github.io/Aura)** · **[Releases](https://github.com/ojuschugh1/Aura/releases)** · **[Issues](https://github.com/ojuschugh1/Aura/issues)**
 
-**Current status: v0.9-dev** — 21 packages, 470+ passing tests.
+**Current status: v1.0-dev** — 23 packages, ~25,000 lines of Go, 490+ passing tests.
 
 ---
 
@@ -149,10 +149,53 @@ aura wiki schema --format kiro                # Kiro steering file
 ```
 
 **Auto-learning** — the daemon automatically:
+- Captures decisions from every MCP call in real-time (no manual `memory add` needed)
 - Ingests session transcripts when sessions end
-- Promotes important memory entries (architecture, decisions, auth) to wiki pages every 5 minutes
-- Runs knowledge metabolism every 6 hours (decay stale pages, detect contradictions, flag consolidation)
-- Creates session summary pages from context stored during each session
+- Promotes important memory entries to wiki pages every 5 minutes
+- Runs knowledge metabolism every 6 hours (decay, contradictions, consolidation)
+
+### MCP Proxy — the Wireshark for AI agents
+
+Sit between your AI tools and their MCP servers. See everything, verify it, stop it.
+
+```bash
+# Start the proxy
+aura proxy start --upstream http://localhost:7437/mcp --port 7438
+
+# Point your AI tool at the proxy instead of the real server
+# In MCP config: "url": "http://localhost:7438/proxy/default/mcp"
+
+# See what your agent is doing
+curl http://localhost:7438/proxy/stats
+curl http://localhost:7438/proxy/log
+```
+
+**OWASP Agentic Top 10 compliance** — every proxied call is scored against the OWASP Agentic Top 10 risks: excessive agency, tool misuse, memory poisoning, identity abuse, resource exhaustion.
+
+```bash
+aura proxy owasp
+# ASI01  Excessive Agency       Agent calling destructive tools without approval
+# ASI03  Tool Misuse            Shell injection or parameter manipulation
+# ASI05  Memory Poisoning       Writing contradictory or malicious memory
+# ...
+```
+
+**Context cliff protection** — tracks token usage per session. Warns at 75%, critical at 90%. Prevents the silent degradation that happens when agents hit their context limit.
+
+**Session replay** — generates diff reports showing what the agent actually did vs what it claimed. Tool breakdown, file changes, claim verification, full timeline.
+
+### A2A Memory Bridge
+
+Implements Google's Agent-to-Agent protocol. Other agents can discover Aura and share verified memory:
+
+```bash
+# Agent discovery
+curl http://localhost:7439/.well-known/agent.json
+
+# Agent A (Claude) stores a decision → Agent B (Cursor) reads it
+curl -X POST http://localhost:7439/a2a/memory \
+  -d '{"action":"write","key":"db","value":"PostgreSQL","agent_id":"claude"}'
+```
 
 ---
 
@@ -163,9 +206,15 @@ aura wiki schema --format kiro                # Kiro steering file
 │           Your AI Tools                 │
 │  Claude Code · Cursor · Kiro · Gemini  │
 └──────────────┬──────────────────────────┘
-               │ MCP Protocol (localhost:7437)
+               │ MCP Protocol
 ┌──────────────▼──────────────────────────┐
-│           Aura Daemon                   │
+│         Aura MCP Proxy (:7438)          │
+│  Traffic logging · OWASP scoring        │
+│  Context cliff · Policy enforcement     │
+└──────────────┬──────────────────────────┘
+               │
+┌──────────────▼──────────────────────────┐
+│           Aura Daemon (:7437)           │
 │                                         │
 │  Memory Store ─── SQLite (WAL mode)     │
 │  MCP Server ───── HTTP/JSON-RPC         │
@@ -177,13 +226,19 @@ aura wiki schema --format kiro                # Kiro steering file
 │  Policy Engine ── .aura/policy.toml     │
 │  Action Escrow                          │
 │  Doom Loop Detector                     │
-│  Auto-Capture Engine                    │
+│  Auto-Capture ─── real-time from MCP    │
 │  Trace Recorder                         │
 │  Model Router ─── .aura/routing.toml    │
 │  Wiki Engine ──── knowledge base        │
 │  Auto-Learner ─── self-improving        │
 │  Audit Chain ──── tamper-evident log    │
 │  Multi-Agent Coordinator                │
+└──────────────┬──────────────────────────┘
+               │
+┌──────────────▼──────────────────────────┐
+│         A2A Bridge (:7439)              │
+│  Agent discovery · Shared memory        │
+│  Cross-agent collaboration              │
 └─────────────────────────────────────────┘
 ```
 
@@ -272,6 +327,13 @@ aura wiki feed <file> --tool sqz|ghostdep|claimcheck|etch|<name>
 aura wiki rm <slug>              # delete page
 aura wiki watch <dir>            # auto-ingest on file changes
 
+# Proxy — MCP traffic observability
+aura proxy start [--port] [--upstream URL]  # start MCP proxy
+aura proxy stats                 # traffic statistics
+aura proxy log                   # recent proxied calls
+aura proxy owasp                 # OWASP Agentic Top 10 report
+aura proxy replay [session_id]   # session replay with diffs
+
 # Setup
 aura setup <claude|cursor|kiro>  # generate MCP config
 aura version [--json]
@@ -307,6 +369,7 @@ The policy engine supports hot-reload — changes take effect within 5 seconds.
 - [x] v0.7 — LLM Wiki (ingest, query, lint, index, log)
 - [x] v0.8 — Wiki advanced (traversal, confidence, viz, watch, schema, URL, filters, tool pipeline)
 - [x] v0.9 — Memory metabolism, audit chain, access tiers, auto-learner daemon
+- [x] v0.10 — MCP proxy, OWASP scoring, context cliff, A2A bridge, session replay, real-time auto-capture
 - [ ] v1.0 — Desktop app (Tauri), browser extension, plugin system
 
 ---
@@ -345,14 +408,19 @@ Aura's unique strengths are cross-tool continuity, claim verification, and the s
 |-----------|------|----------------|---------------|-------------------|
 | Cross-tool memory | ✅ MCP-native | ❌ Claude only | ❌ Cursor only | ✅ MCP-native |
 | Claim verification | ✅ | ❌ | ❌ | ❌ |
+| MCP proxy / observability | ✅ | ❌ | ❌ | ❌ |
+| OWASP Agentic scoring | ✅ | ❌ | ❌ | ❌ |
+| Context cliff protection | ✅ | ❌ | ❌ | ❌ |
+| A2A protocol bridge | ✅ | ❌ | ❌ | ❌ |
 | Knowledge wiki | ✅ compounding | ❌ | ❌ | ❌ |
+| Real-time auto-capture | ✅ from MCP wire | ❌ | ❌ | ❌ |
 | Token compression | ✅ via sqz | ❌ | ❌ | ❌ |
 | Dependency scanning | ✅ via ghostdep | ❌ | ❌ | ❌ |
 | Cost tracking | ✅ | ❌ | ❌ | ❌ |
 | Local-first / private | ✅ SQLite on disk | ⚠️ cloud-stored | ⚠️ cloud-stored | ✅ self-hosted option |
 | Single binary install | ✅ Go | N/A (built-in) | N/A (built-in) | ❌ Python |
-| Auto-learning | ✅ daemon-level | ❌ | ❌ | ❌ |
-| Audit trail | ✅ tamper-evident | ❌ | ❌ | ❌ |
+| Immutable audit chain | ✅ tamper-evident | ❌ | ❌ | ❌ |
+| Session replay with diff | ✅ | ❌ | ❌ | ❌ |
 
 **Where others are better:** Claude Projects has deeper integration with Claude's context window. Cursor's memory is zero-config within Cursor. Mem0's cloud offering has team sync built in. Aura trades those conveniences for cross-tool portability and verification.
 
