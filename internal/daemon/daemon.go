@@ -97,9 +97,9 @@ func Start(dir string, port int) error {
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	// Setsid creates a new session so the daemon is fully detached from the
-	// terminal and won't receive SIGHUP when the parent CLI process exits.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// Detach the daemon from the parent's process group so it survives
+	// the CLI process exiting. Platform-specific implementation.
+	cmd.SysProcAttr = daemonSysProcAttr()
 
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
